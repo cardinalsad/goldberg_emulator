@@ -1034,7 +1034,7 @@ void Callback(Common_Message *msg)
             std::string const& connect_str = msg->friend_messages().connect_str();
             GameRichPresenceJoinRequested_t data;
             data.m_steamIDFriend = CSteamID((uint64)msg->source_id());
-            strncpy(data.m_rgchConnect, connect_str.c_str(), connect_str.length());
+            strncpy(data.m_rgchConnect, connect_str.c_str(), connect_str.length()+1);
             callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
         }
     }
