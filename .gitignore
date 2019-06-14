@@ -10,3 +10,11 @@ base.lib
 rtlgenrandom*
 steamclient.exp
 steamclient.lib
+external
+.vs
+*.sln
+*.vcxproj*
+Debug
+Release
+Win32
+x64
