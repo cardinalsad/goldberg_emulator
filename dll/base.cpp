@@ -16,32 +16,62 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "base.h"
+#include <random>
+
+// Random device generator
+static std::random_device rd;
+static std::mt19937 gen(rd());
+
+static void randombytes(char* buf, size_t len)
+{
+	// uniform integer distribution
+	std::uniform_int_distribution<> dis(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+
+	// Make sure we can hold our buffer size as int32_t
+	size_t rand_buf_len = len / 4 + 1;
+	int32_t* rand_buf = new int32_t[rand_buf_len];
+	// Generator some (pseudo) random numbers
+	for (int i = 0; i < rand_buf_len; ++i)
+		rand_buf[i] = dis(gen);
+
+	// Copy the random bytes to buffer
+	memcpy(buf, rand_buf, len);
+
+	// Don't forget to free it
+	delete[]rand_buf;
+}
 
 #ifdef STEAM_WIN32
 #include <windows.h>
 #include <direct.h>
 
-#define SystemFunction036 NTAPI SystemFunction036
-#include <ntsecapi.h>
-#undef SystemFunction036
-
-static void
-randombytes(char * const buf, const size_t size)
-{
-
-    RtlGenRandom((PVOID) buf, (ULONG) size);
-}
-
 std::string get_env_variable(std::string name)
 {
-    char env_variable[1024];
-    DWORD ret = GetEnvironmentVariableA(name.c_str(), env_variable, sizeof(env_variable));
-    if (ret <= 0) {
-        return std::string();
-    }
+	// base env buffer size
+	constexpr size_t base_size = 1024;
+	DWORD size = base_size;
+	std::string res(base_size, '\0');
+	size = GetEnvironmentVariableA(name.c_str(), const_cast<char*>(res.c_str()), size);
+	if (size <= 0) {
+		return std::string();
+	}
+	// If GetEnvironmentVariable return is greater than the buffer size,
+	// then the return parameter is the env var size
+	if (size > base_size)
+	{
+		// So allocate that much buffer to hold it all
+		res.resize(size);
+		size = GetEnvironmentVariableA(name.c_str(), const_cast<char*>(res.c_str()), size);
+		if (size <= 0)
+		{
+			return std::string();
+		}
+	}
+	// Then resize to what we need (without the null char,
+	// cause c_str() assures that it has a null char)
+	res.resize(size);
 
-    env_variable[ret] = 0;
-    return std::string(env_variable);
+	return res;
 }
 
 #else
@@ -50,34 +80,6 @@ std::string get_env_variable(std::string name)
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-static int fd = -1;
-
-static void randombytes(char *buf, size_t size)
-{
-  int i;
-
-  if (fd == -1) {
-    for (;;) {
-      fd = open("/dev/urandom",O_RDONLY);
-      if (fd != -1) break;
-      sleep(1);
-    }
-  }
-
-  while (size > 0) {
-    if (size < 1048576) i = size; else i = 1048576;
-
-    i = read(fd,buf,i);
-    if (i < 1) {
-      sleep(1);
-      continue;
-    }
-
-    buf += i;
-    size -= i;
-  }
-}
 
 std::string get_env_variable(std::string name)
 {
