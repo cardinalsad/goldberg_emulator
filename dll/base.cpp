@@ -20,19 +20,38 @@
 
 // Random device generator
 static std::random_device rd;
-static std::mt19937 gen(rd());
+static std::mt19937_64 gen(rd());
+
+template<typename T>
+static void randombytes(T& _buf)
+{
+    // uniform integer distribution
+    std::uniform_int_distribution<int64_t> dis;
+
+    uint8_t* buf = reinterpret_cast<uint8_t*>(&_buf);
+
+    // Make sure we can hold our buffer size as int64_t
+    constexpr size_t rand_buf_len = sizeof(T) / sizeof(int64_t) + (sizeof(T)%sizeof(int64_t) ? 1 : 0);
+    int64_t rand_buf[rand_buf_len];
+    // Generate some (pseudo) random numbers
+    for (int i = 0; i < rand_buf_len; ++i)
+        rand_buf[i] = dis(gen);
+
+    // Copy the random bytes to buffer
+    memcpy(buf, rand_buf, sizeof(T));
+}
 
 static void randombytes(char* buf, size_t len)
 {
 	// uniform integer distribution
-	std::uniform_int_distribution<> dis(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+    std::uniform_int_distribution<int64_t> dis;
 
-	// Make sure we can hold our buffer size as int32_t
-	size_t rand_buf_len = len / 4 + 1;
-	int32_t* rand_buf = new int32_t[rand_buf_len];
-	// Generator some (pseudo) random numbers
-	for (int i = 0; i < rand_buf_len; ++i)
-		rand_buf[i] = dis(gen);
+	// Make sure we can hold our buffer size as int64_t
+	size_t rand_buf_len = len / sizeof(int64_t) + (len % sizeof(int64_t) ? 1 : 0);
+	int64_t* rand_buf = new int64_t[rand_buf_len];
+	// Generate some (pseudo) random numbers
+    for (int i = 0; i < rand_buf_len; ++i)
+        rand_buf[i] = dis(gen);
 
 	// Copy the random bytes to buffer
 	memcpy(buf, rand_buf, len);
@@ -97,7 +116,7 @@ std::recursive_mutex global_mutex;
 
 SteamAPICall_t generate_steam_api_call_id() {
     static SteamAPICall_t a;
-    randombytes((char *)&a, sizeof(a));
+    randombytes(a);
     ++a;
     if (a == 0) ++a;
     return a;
@@ -105,7 +124,7 @@ SteamAPICall_t generate_steam_api_call_id() {
 
 int generate_random_int() {
     int a;
-    randombytes((char *)&a, sizeof(a));
+    randombytes(a);
     return a;
 }
 
@@ -120,7 +139,7 @@ static uint32 generate_steam_ticket_id() {
 static unsigned generate_account_id()
 {
     int a;
-    randombytes((char *)&a, sizeof(a));
+    randombytes(a);
     a = abs(a);
     if (!a) ++a;
     return a;
