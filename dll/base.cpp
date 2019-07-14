@@ -27,23 +27,19 @@
 // So process it before sending it to debug console
 bool _trace(const char* format, ...)
 {
-    constexpr const int len = 1024; // Initial buffer size, hope it is big enought, we will exapnd it if not.
-    int res;
-    char *buffer = new char[len];
-
     va_list argptr;
     va_start(argptr, format);
-    res = vsnprintf(buffer, len, format, argptr);
+    va_list argptr2;
+    va_copy(argptr2, argptr);
+    int len;
+
+    len = vsnprintf(nullptr, 0, format, argptr);
+
+    char *buffer = new char[++len];
+    vsnprintf(buffer, len, format, argptr2);
+
     va_end(argptr);
-    if (res >= len)
-    {
-        delete[]buffer;
-        // Now we are sure we have enought free space to contain the string
-        buffer = new char[++res];
-        va_start(argptr, format);
-        vsnprintf(buffer, res, format, argptr);
-        va_end(argptr);
-    }
+    va_end(argptr2);
 
     OutputDebugString(buffer);
     delete[]buffer;
@@ -52,7 +48,6 @@ bool _trace(const char* format, ...)
 }
 #endif // VS_TRACE_DEBUG
 #endif // EMU_RELEASE_BUILD
-
 
 #include <windows.h>
 #include <direct.h>
