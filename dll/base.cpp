@@ -64,8 +64,8 @@ bool _trace(const char* format, ...)
 static void
 randombytes(char * const buf, const size_t size)
 {
-
-    RtlGenRandom((PVOID) buf, (ULONG) size);
+    BOOLEAN res = RtlGenRandom((PVOID) buf, (ULONG) size);
+    PRINT_DEBUG("RtlGenRandom result: %s\n", (res ? "TRUE" : "FALSE"));
 }
 
 std::string get_env_variable(std::string name)
