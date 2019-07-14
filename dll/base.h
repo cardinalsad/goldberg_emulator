@@ -44,7 +44,12 @@
 EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 #define PATH_SEPARATOR "\\"
 #ifndef EMU_RELEASE_BUILD
+#ifdef VS_TRACE_DEBUG
+bool _trace(const char* format, ...);
+#define PRINT_DEBUG(FMT, ...) _trace(FMT, ##__VA_ARGS__)
+#else // VS_TRACE_DEBUG
 #define PRINT_DEBUG(a, ...) do {FILE *t = fopen("STEAM_LOG.txt", "a"); fprintf(t, "%u " a, GetCurrentThreadId(), __VA_ARGS__); fclose(t); WSASetLastError(0);} while (0)
+#endif // VS_TRACE_DEBUG
 #endif
 #else
 #include <arpa/inet.h>

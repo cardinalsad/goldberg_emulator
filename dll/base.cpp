@@ -18,6 +18,42 @@
 #include "base.h"
 
 #ifdef STEAM_WIN32
+
+#ifndef EMU_RELEASE_BUILD
+#ifdef VS_TRACE_DEBUG
+#include <cstdio>
+
+// Visual Studio doesn't seem to support hh* or ll* in OutputDebugString
+// So process it before sending it to debug console
+bool _trace(const char* format, ...)
+{
+    constexpr const int len = 1024; // Initial buffer size, hope it is big enought, we will exapnd it if not.
+    int res;
+    char *buffer = new char[len];
+
+    va_list argptr;
+    va_start(argptr, format);
+    res = vsnprintf(buffer, len, format, argptr);
+    va_end(argptr);
+    if (res >= len)
+    {
+        delete[]buffer;
+        // Now we are sure we have enought free space to contain the string
+        buffer = new char[++res];
+        va_start(argptr, format);
+        vsnprintf(buffer, res, format, argptr);
+        va_end(argptr);
+    }
+
+    OutputDebugString(buffer);
+    delete[]buffer;
+
+    return true;
+}
+#endif // VS_TRACE_DEBUG
+#endif // EMU_RELEASE_BUILD
+
+
 #include <windows.h>
 #include <direct.h>
 
