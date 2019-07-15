@@ -19,6 +19,273 @@
 
 #include <fstream>
 
+#if not defined(EMU_RELEASE_BUILD)
+static std::string callback_to_string(int cb)
+{
+    switch (cb)
+    {
+#define K_ICALLBACK(STRUCT) case STRUCT::k_iCallback: return std::string(#STRUCT)
+        // ISteamUser
+        K_ICALLBACK(SteamServersConnected_t);
+        K_ICALLBACK(SteamServerConnectFailure_t);
+        K_ICALLBACK(SteamServersDisconnected_t);
+        K_ICALLBACK(ClientGameServerDeny_t);
+        K_ICALLBACK(IPCFailure_t);
+        K_ICALLBACK(LicensesUpdated_t);
+        K_ICALLBACK(ValidateAuthTicketResponse_t);
+        K_ICALLBACK(MicroTxnAuthorizationResponse_t);
+        K_ICALLBACK(EncryptedAppTicketResponse_t);
+        K_ICALLBACK(GetAuthSessionTicketResponse_t);
+        K_ICALLBACK(GameWebCallback_t);
+        K_ICALLBACK(StoreAuthURLResponse_t);
+        K_ICALLBACK(MarketEligibilityResponse_t);
+        // ISteamGameServer
+        K_ICALLBACK(GSClientApprove_t);
+        K_ICALLBACK(GSClientDeny_t);
+        K_ICALLBACK(GSClientKick_t);
+        K_ICALLBACK(GSClientAchievementStatus_t);
+        K_ICALLBACK(GSPolicyResponse_t);
+        K_ICALLBACK(GSGameplayStats_t);
+        K_ICALLBACK(GSClientGroupStatus_t);
+        K_ICALLBACK(GSReputation_t);
+        K_ICALLBACK(AssociateWithClanResult_t);
+        K_ICALLBACK(ComputeNewPlayerCompatibilityResult_t);
+        // ISteamFriends
+        K_ICALLBACK(PersonaStateChange_t);
+        K_ICALLBACK(GameOverlayActivated_t);
+        K_ICALLBACK(GameServerChangeRequested_t);
+        K_ICALLBACK(GameLobbyJoinRequested_t);
+        K_ICALLBACK(AvatarImageLoaded_t);
+        K_ICALLBACK(ClanOfficerListResponse_t);
+        K_ICALLBACK(FriendRichPresenceUpdate_t);
+        K_ICALLBACK(GameRichPresenceJoinRequested_t);
+        K_ICALLBACK(GameConnectedClanChatMsg_t);
+        K_ICALLBACK(GameConnectedChatJoin_t);
+        K_ICALLBACK(GameConnectedChatLeave_t);
+        K_ICALLBACK(DownloadClanActivityCountsResult_t);
+        K_ICALLBACK(JoinClanChatRoomCompletionResult_t);
+        K_ICALLBACK(GameConnectedFriendChatMsg_t);
+        K_ICALLBACK(FriendsGetFollowerCount_t);
+        K_ICALLBACK(FriendsIsFollowing_t);
+        K_ICALLBACK(FriendsEnumerateFollowingList_t);
+        K_ICALLBACK(SetPersonaNameResponse_t);
+        K_ICALLBACK(UnreadChatMessagesChanged_t);
+        // ISteamBilling
+        // ISteamMatchmaking
+        K_ICALLBACK(FavoritesListChanged_t);
+        K_ICALLBACK(LobbyInvite_t);
+        K_ICALLBACK(LobbyEnter_t);
+        K_ICALLBACK(LobbyDataUpdate_t);
+        K_ICALLBACK(LobbyChatUpdate_t);
+        K_ICALLBACK(LobbyChatMsg_t);
+        K_ICALLBACK(LobbyGameCreated_t);
+        K_ICALLBACK(LobbyMatchList_t);
+        K_ICALLBACK(LobbyKicked_t);
+        K_ICALLBACK(LobbyCreated_t);
+        K_ICALLBACK(PSNGameBootInviteResult_t);
+        K_ICALLBACK(FavoritesListAccountsUpdated_t);
+        // ISteamContentServer
+        // ISteamUtils
+        K_ICALLBACK(IPCountry_t);
+        K_ICALLBACK(LowBatteryPower_t);
+        K_ICALLBACK(SteamAPICallCompleted_t);
+        K_ICALLBACK(SteamShutdown_t);
+        K_ICALLBACK(CheckFileSignature_t);
+        K_ICALLBACK(GamepadTextInputDismissed_t);
+        // IClientFriends
+        // IClientUser
+        // ISteamApps
+        // ISteamUserStats
+        K_ICALLBACK(UserStatsReceived_t);
+        K_ICALLBACK(UserStatsStored_t);
+        K_ICALLBACK(UserAchievementStored_t);
+        K_ICALLBACK(LeaderboardFindResult_t);
+        K_ICALLBACK(LeaderboardScoresDownloaded_t);
+        K_ICALLBACK(LeaderboardScoreUploaded_t);
+        K_ICALLBACK(NumberOfCurrentPlayers_t);
+        K_ICALLBACK(UserStatsUnloaded_t);
+        K_ICALLBACK(UserAchievementIconFetched_t);
+        K_ICALLBACK(GlobalAchievementPercentagesReady_t);
+        K_ICALLBACK(LeaderboardUGCSet_t);
+        // Same as GlobalStatsReceived_t K_ICALLBACK(PS3TrophiesInstalled_t);
+        K_ICALLBACK(GlobalStatsReceived_t);
+        // ISteamNetworking
+        K_ICALLBACK(P2PSessionRequest_t);
+        K_ICALLBACK(P2PSessionConnectFail_t);
+        K_ICALLBACK(SocketStatusCallback_t);
+        // ISteamNetworkingSockets
+        K_ICALLBACK(SteamNetConnectionStatusChangedCallback_t);
+        // ISteamNetworkingMessages
+        // ISteamClientRemoteStorage
+        K_ICALLBACK(RemoteStorageAppSyncedClient_t);
+        K_ICALLBACK(RemoteStorageAppSyncedServer_t);
+        K_ICALLBACK(RemoteStorageAppSyncProgress_t);
+        K_ICALLBACK(RemoteStorageAppSyncStatusCheck_t);
+        K_ICALLBACK(RemoteStorageFileShareResult_t);
+        K_ICALLBACK(RemoteStoragePublishFileResult_t);
+        K_ICALLBACK(RemoteStorageDeletePublishedFileResult_t);
+        K_ICALLBACK(RemoteStorageEnumerateUserPublishedFilesResult_t);
+        K_ICALLBACK(RemoteStorageSubscribePublishedFileResult_t);
+        K_ICALLBACK(RemoteStorageEnumerateUserSubscribedFilesResult_t);
+        K_ICALLBACK(RemoteStorageUnsubscribePublishedFileResult_t);
+        K_ICALLBACK(RemoteStorageUpdatePublishedFileResult_t);
+        K_ICALLBACK(RemoteStorageDownloadUGCResult_t);
+        K_ICALLBACK(RemoteStorageGetPublishedFileDetailsResult_t);
+        K_ICALLBACK(RemoteStorageEnumerateWorkshopFilesResult_t);
+        K_ICALLBACK(RemoteStorageGetPublishedItemVoteDetailsResult_t);
+        K_ICALLBACK(RemoteStoragePublishedFileSubscribed_t);
+        K_ICALLBACK(RemoteStoragePublishedFileUnsubscribed_t);
+        K_ICALLBACK(RemoteStoragePublishedFileDeleted_t);
+        K_ICALLBACK(RemoteStorageUpdateUserPublishedItemVoteResult_t);
+        K_ICALLBACK(RemoteStorageUserVoteDetails_t);
+        K_ICALLBACK(RemoteStorageEnumerateUserSharedWorkshopFilesResult_t);
+        K_ICALLBACK(RemoteStorageSetUserPublishedFileActionResult_t);
+        K_ICALLBACK(RemoteStorageEnumeratePublishedFilesByUserActionResult_t);
+        K_ICALLBACK(RemoteStoragePublishFileProgress_t);
+        K_ICALLBACK(RemoteStoragePublishedFileUpdated_t);
+        K_ICALLBACK(RemoteStorageFileWriteAsyncComplete_t);
+        K_ICALLBACK(RemoteStorageFileReadAsyncComplete_t);
+        // IClientDepotBuilder
+        // ISteamGameServerItems
+        // IClientUtils
+        // ISteamGameCoordinator
+        K_ICALLBACK(GCMessageAvailable_t);
+        K_ICALLBACK(GCMessageFailed_t);
+        // ISteamGameServerStats
+        K_ICALLBACK(GSStatsReceived_t);
+        K_ICALLBACK(GSStatsStored_t);
+        // Same as UserStatsUnloaded_t K_ICALLBACK(GSStatsUnloaded_t);
+        // ISteam2Async
+        // ISteamGameStats
+        // IClientHTTP
+        K_ICALLBACK(HTTPRequestCompleted_t);
+        K_ICALLBACK(HTTPRequestHeadersReceived_t);
+        K_ICALLBACK(HTTPRequestDataReceived_t);
+        // IClientScreenshots
+        // ISteamScreenshots
+        K_ICALLBACK(ScreenshotReady_t);
+        K_ICALLBACK(ScreenshotRequested_t);
+        // IClientAudio
+        // IClientUnifiedMessages
+        K_ICALLBACK(SteamUnifiedMessagesSendMethodResult_t);
+        // ISteamStreamLauncher
+        // IClientController
+        // ISteamController
+        // IClientParentalSettings
+        // IClientDeviceAuth
+        // IClientNetworkDeviceManager
+        // IClientMusic
+        // IClientRemoteClientManager
+        // IClientUGC
+        K_ICALLBACK(SteamUGCQueryCompleted_t);
+        K_ICALLBACK(SteamUGCRequestUGCDetailsResult_t);
+        K_ICALLBACK(CreateItemResult_t);
+        K_ICALLBACK(SubmitItemUpdateResult_t);
+        K_ICALLBACK(ItemInstalled_t);
+        K_ICALLBACK(DownloadItemResult_t);
+        K_ICALLBACK(UserFavoriteItemsListChanged_t);
+        K_ICALLBACK(SetUserItemVoteResult_t);
+        K_ICALLBACK(GetUserItemVoteResult_t);
+        K_ICALLBACK(StartPlaytimeTrackingResult_t);
+        K_ICALLBACK(StopPlaytimeTrackingResult_t);
+        K_ICALLBACK(AddUGCDependencyResult_t);
+        K_ICALLBACK(RemoveUGCDependencyResult_t);
+        K_ICALLBACK(AddAppDependencyResult_t);
+        K_ICALLBACK(RemoveAppDependencyResult_t);
+        K_ICALLBACK(GetAppDependenciesResult_t);
+        K_ICALLBACK(DeleteItemResult_t);
+        // ISteamStreamClient
+        // IClientProductBuilder
+        // IClientShortcuts
+        // IClientRemoteControlManager
+        // ISteamAppList
+        K_ICALLBACK(SteamAppInstalled_t);
+        K_ICALLBACK(SteamAppUninstalled_t);
+        // ISteamMusic
+        K_ICALLBACK(PlaybackStatusHasChanged_t);
+        K_ICALLBACK(VolumeHasChanged_t);
+        // ISteamMusicRemote
+        K_ICALLBACK(MusicPlayerRemoteWillActivate_t);
+        K_ICALLBACK(MusicPlayerRemoteWillDeactivate_t);
+        K_ICALLBACK(MusicPlayerRemoteToFront_t);
+        K_ICALLBACK(MusicPlayerWillQuit_t);
+        K_ICALLBACK(MusicPlayerWantsPlay_t);
+        K_ICALLBACK(MusicPlayerWantsPause_t);
+        K_ICALLBACK(MusicPlayerWantsPlayPrevious_t);
+        K_ICALLBACK(MusicPlayerWantsPlayNext_t);
+        K_ICALLBACK(MusicPlayerWantsShuffled_t);
+        K_ICALLBACK(MusicPlayerWantsLooped_t);
+        K_ICALLBACK(MusicPlayerWantsVolume_t);
+        K_ICALLBACK(MusicPlayerSelectsQueueEntry_t);
+        K_ICALLBACK(MusicPlayerSelectsPlaylistEntry_t);
+        K_ICALLBACK(MusicPlayerWantsPlayingRepeatStatus_t);
+        // IClientGameNotification
+        // ISteamGameNotification
+        // ISteamHTMLSurface
+        K_ICALLBACK(HTML_BrowserReady_t);
+        K_ICALLBACK(HTML_NeedsPaint_t);
+        K_ICALLBACK(HTML_StartRequest_t);
+        K_ICALLBACK(HTML_CloseBrowser_t);
+        K_ICALLBACK(HTML_URLChanged_t);
+        K_ICALLBACK(HTML_FinishedRequest_t);
+        K_ICALLBACK(HTML_OpenLinkInNewTab_t);
+        K_ICALLBACK(HTML_ChangedTitle_t);
+        K_ICALLBACK(HTML_SearchResults_t);
+        K_ICALLBACK(HTML_CanGoBackAndForward_t);
+        K_ICALLBACK(HTML_HorizontalScroll_t);
+        K_ICALLBACK(HTML_VerticalScroll_t);
+        K_ICALLBACK(HTML_LinkAtPosition_t);
+        K_ICALLBACK(HTML_JSAlert_t);
+        K_ICALLBACK(HTML_JSConfirm_t);
+        K_ICALLBACK(HTML_FileOpenDialog_t);
+        K_ICALLBACK(HTML_NewWindow_t);
+        K_ICALLBACK(HTML_SetCursor_t);
+        K_ICALLBACK(HTML_StatusText_t);
+        K_ICALLBACK(HTML_ShowToolTip_t);
+        K_ICALLBACK(HTML_UpdateToolTip_t);
+        K_ICALLBACK(HTML_HideToolTip_t);
+        K_ICALLBACK(HTML_BrowserRestarted_t);
+        // IClientVideo
+        K_ICALLBACK(BroadcastUploadStart_t);
+        K_ICALLBACK(BroadcastUploadStop_t);
+        K_ICALLBACK(GetVideoURLResult_t);
+        K_ICALLBACK(GetOPFSettingsResult_t);
+        // ISteamInventory
+        K_ICALLBACK(SteamInventoryResultReady_t);
+        K_ICALLBACK(SteamInventoryFullUpdate_t);
+        K_ICALLBACK(SteamInventoryDefinitionUpdate_t);
+        K_ICALLBACK(SteamInventoryEligiblePromoItemDefIDs_t);
+        K_ICALLBACK(SteamInventoryStartPurchaseResult_t);
+        K_ICALLBACK(SteamInventoryRequestPricesResult_t);
+        // IClientBluetoothManager
+        // IClientSharedConnection
+        // ISteamParentalSettings
+        K_ICALLBACK(SteamParentalSettingsChanged_t);
+        // IClientShader
+        // ISteamGameSearch
+        K_ICALLBACK(SearchForGameProgressCallback_t);
+        K_ICALLBACK(SearchForGameResultCallback_t);
+        K_ICALLBACK(RequestPlayersForGameProgressCallback_t);
+        K_ICALLBACK(RequestPlayersForGameResultCallback_t);
+        K_ICALLBACK(RequestPlayersForGameFinalResultCallback_t);
+        K_ICALLBACK(SubmitPlayerResultResultCallback_t);
+        K_ICALLBACK(EndGameResultCallback_t);
+        // ISteamParties
+        K_ICALLBACK(JoinPartyCallback_t);
+        K_ICALLBACK(CreateBeaconCallback_t);
+        K_ICALLBACK(ReservationNotificationCallback_t);
+        K_ICALLBACK(ChangeNumOpenSlotsCallback_t);
+        K_ICALLBACK(AvailableBeaconLocationsUpdated_t);
+        K_ICALLBACK(ActiveBeaconsUpdated_t);
+        // IClientParties
+    default: return std::string("Unknown callback");
+#undef K_ICALLBACK
+    }
+}
+#else// EMU_RELEASE_BUILD is defined
+#define callback_to_string(cb) std::string()
+#endif//EMU_RELEASE_BUILD
+
 static void background_thread(Steam_Client *client)
 {
     PRINT_DEBUG("background thread starting\n");
@@ -1420,6 +1687,8 @@ void Steam_Client::RegisterCallback( class CCallbackBase *pCallback, int iCallba
             PRINT_DEBUG("Unknown callback base %i\n", base_callback);
     };
 
+    PRINT_DEBUG("Steam_Client::RegisterCallback: %s\n", callback_to_string(iCallback).c_str());
+
     if (isGameServer) {
         callbacks_server->addCallBack(iCallback, pCallback);
     } else {
@@ -1643,6 +1912,8 @@ void Steam_Client::UnregisterCallback( class CCallbackBase *pCallback)
         default:
             PRINT_DEBUG("Unknown callback base %i\n", base_callback);
     };
+
+    PRINT_DEBUG("Steam_Client::UnregisterCallback: %s\n", callback_to_string(iCallback).c_str());
 
     if (isGameServer) {
         callbacks_server->rmCallBack(iCallback, pCallback);
