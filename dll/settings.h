@@ -138,6 +138,9 @@ public:
 
     //networking
     bool disable_networking = false;
+
+    //gameserver
+    bool disable_source_query = false;
 };
 
 #endif

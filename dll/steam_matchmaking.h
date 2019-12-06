@@ -15,6 +15,9 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef __INCLUDED_STEAM_MATCHMAKING__
+#define __INCLUDED_STEAM_MATCHMAKING__
+
 #include "base.h"
 
 #define SEND_LOBBY_RATE 5.0
@@ -1420,3 +1423,5 @@ void Callback(Common_Message *msg)
 
 
 };
+
+#endif

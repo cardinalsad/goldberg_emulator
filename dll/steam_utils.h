@@ -15,6 +15,9 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef __INCLUDED_STEAM_UTILS__
+#define __INCLUDED_STEAM_UTILS__
+
 #include "base.h"
 #include "local_storage.h"
 
@@ -371,3 +374,5 @@ int FilterText( char* pchOutFilteredText, uint32 nByteSizeOutFilteredText, const
 }
 
 };
+
+#endif
