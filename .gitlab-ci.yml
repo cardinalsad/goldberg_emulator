@@ -155,9 +155,9 @@ sign:
   script:
     - apk update && apk add libcurl curl-dev openssl-dev autoconf build-base automake libtool git
     - git clone https://github.com/dmcgowan/osslsigncode
-    - pushd osslsigncode
+    - cd osslsigncode
     - ./autogen.sh && ./configure && make && make install && make clean || exit 1
-    - popd
+    - cd ..
     - C="US"
     - O="Valve"
     - L="Bellevue"
