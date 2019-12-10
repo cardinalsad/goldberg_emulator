@@ -175,8 +175,9 @@ sign:
     - mv steam_api* release/
 
   artifacts:
-    - linux/
-    - release/
+    paths:
+      - linux/
+      - release/
 
 deploy_all:
   stage: deploy
