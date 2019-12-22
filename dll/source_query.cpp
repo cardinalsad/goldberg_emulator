@@ -250,7 +250,7 @@ std::vector<uint8_t> Source_Query::handle_source_query(const void* buffer, size_
 
                 serialize_response(output_buffer, source_query_magic::simple);
                 serialize_response(output_buffer, source_response_header::A2S_RULES);
-                serialize_response(output_buffer, static_cast<uint32_t>(values.size()));
+                serialize_response(output_buffer, static_cast<uint16_t>(values.size()));
 
                 for (auto const& i : values)
                 {
