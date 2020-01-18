@@ -15,11 +15,18 @@
 
 /* Platform-specific includes */
 #if defined(_WIN32)
-#	define WIN32_LEAN_AND_MEAN 1
-#	undef UNICODE
-#	include "windows.h"
-#	include "xinput.h"
-#	pragma comment(lib, "XINPUT9_1_0.lib")
+	#undef UNICODE
+	#define INITGUID
+	#define WIN32_LEAN_AND_MEAN
+	#define VC_EXTRALEAN
+	#include <Windows.h>
+
+	#include <SetupAPI.h>
+	#include <winioctl.h>
+
+	#pragma comment(lib, "Setupapi.lib")
+
+	#include <stdint.h>
 #elif defined(__linux__)
 #	include <linux/joystick.h>
 #	include <stdio.h>
@@ -58,7 +65,11 @@ struct GAMEPAD_STATE {
 	GAMEPAD_AXIS stick[STICK_COUNT];
 	GAMEPAD_TRIGINFO trigger[TRIGGER_COUNT];
 	int bLast, bCurrent, flags;
-#if defined(__linux__)
+#if defined(_WIN32)
+	WCHAR* device;
+	HANDLE hDevice;
+	uint8_t type;
+#elif defined(__linux__)
 	char* device;
 	int fd;
 	int effect;
@@ -67,8 +78,10 @@ struct GAMEPAD_STATE {
 #endif
 };
 
-/* State of the four gamepads */
-static GAMEPAD_STATE STATE[4];
+/* State of the gamepads */
+static GAMEPAD_STATE STATE[GAMEPAD_COUNT];
+
+static int initialized = 0;
 
 /* Note whether a gamepad is currently connected */
 #define FLAG_CONNECTED	(1<<0)
@@ -90,54 +103,472 @@ static void GamepadUpdateTrigger	(GAMEPAD_TRIGINFO* trig);
 /* Platform-specific implementation code */
 #if defined(_WIN32)
 
-void GamepadInit(void) {
+/*
+ * Open XInput code from:
+ * https://gitlab.com/Nemirtingas/open_xinput
+ */
+
+#define XINPUT_GAMEPAD_DPAD_UP          0x0001
+#define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
+#define XINPUT_GAMEPAD_DPAD_LEFT        0x0004
+#define XINPUT_GAMEPAD_DPAD_RIGHT       0x0008
+#define XINPUT_GAMEPAD_START            0x0010
+#define XINPUT_GAMEPAD_BACK             0x0020
+#define XINPUT_GAMEPAD_LEFT_THUMB       0x0040
+#define XINPUT_GAMEPAD_RIGHT_THUMB      0x0080
+#define XINPUT_GAMEPAD_LEFT_SHOULDER    0x0100
+#define XINPUT_GAMEPAD_RIGHT_SHOULDER   0x0200
+#define XINPUT_GAMEPAD_GUIDE            0x0400
+#define XINPUT_GAMEPAD_A                0x1000
+#define XINPUT_GAMEPAD_B                0x2000
+#define XINPUT_GAMEPAD_X                0x4000
+#define XINPUT_GAMEPAD_Y                0x8000
+
+DEFINE_GUID(GUID_DEVINTERFACE_XINPUT, 0xEC87F1E3, 0xC13B, 0x4100, 0xB5, 0xF7, 0x8B, 0x84, 0xD5, 0x42, 0x60, 0xCB);
+
+#define IOCTL_XINPUT_BASE  0x8000
+
+#define XINPUT_READ_ACCESS  ( 0x0001 )
+#define XINPUT_WRITE_ACCESS ( 0x0002 )
+#define XINPUT_RW_ACCESS    ( (XINPUT_READ_ACCESS) | (XINPUT_WRITE_ACCESS) )
+
+#define IOCTL_XINPUT_INIT             CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x00, XINPUT_READ_ACCESS)
+#define IOCTL_XINPUT_GET_CAPABILITIES CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x04, XINPUT_RW_ACCESS)
+#define IOCTL_XINPUT_8                CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x08, XINPUT_RW_ACCESS)
+#define IOCTL_XINPUT_GET_DATA         CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x0C, XINPUT_RW_ACCESS)
+#define IOCTL_XINPUT_SET_DATA         CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x10, XINPUT_WRITE_ACCESS)
+#define IOCTL_XINPUT_20               CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x14, XINPUT_WRITE_ACCESS)
+#define IOCTL_XINPUT_GET_BATTERY_INFO CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x18, XINPUT_RW_ACCESS)
+#define IOCTL_XINPUT_28               CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x1C, XINPUT_WRITE_ACCESS)
+#define IOCTL_XINPUT_32               CTL_CODE(IOCTL_XINPUT_BASE, 0x800, 0x20, XINPUT_RW_ACCESS)
+
+#pragma pack(push, 1)
+struct buff_in_t
+{
+	int16_t field_0;
+	uint8_t field_2;
+};
+
+struct buff_out_xbox_t
+{
+	uint8_t field_0;
+	uint8_t field_1;
+	uint8_t status;
+	uint8_t field_3;
+	uint8_t field_4;
+	uint32_t dwPacketNumber;
+	uint8_t field_9;
+	uint8_t field_A;
+	uint16_t wButtons;
+	uint8_t bLeftTrigger;
+	uint8_t bRightTrigger;
+	int16_t sThumbLX;
+	int16_t sThumbLY;
+	int16_t sThumbRX;
+	int16_t sThumbRY;
+	uint32_t field_17;
+	uint16_t field_1B;
+};
+
+struct buff_out_xbox_one_t
+{
+	uint8_t status;
+	uint8_t field_1;
+	uint8_t field_2;
+	uint32_t dwPacketNumber;
+	uint8_t field_7;
+	uint16_t wButtons;
+	uint8_t bLeftTrigger;
+	uint8_t bRightTrigger;
+	int16_t sThumbLX;
+	int16_t sThumbLY;
+	int16_t sThumbRX;
+	int16_t sThumbRY;
+	uint16_t field_14;
+};
+
+#pragma pack(pop)
+
+static HRESULT DeviceIo(HANDLE hDevice, DWORD ioControlCode, LPVOID inBuff, DWORD inBuffSize, LPVOID outBuff, DWORD outBuffSize, LPOVERLAPPED pOverlapped)
+{
+	HRESULT result;
+	int BytesReturned;
+	DWORD lpBytesReturned;
+
+	lpBytesReturned = 0;
+	BytesReturned = DeviceIoControl(hDevice, ioControlCode, inBuff, inBuffSize, outBuff, outBuffSize, &lpBytesReturned, pOverlapped);
+	if (BytesReturned == TRUE)
+		return ERROR_SUCCESS;
+
+	if (GetLastError() == ERROR_IO_PENDING && pOverlapped)
+		result = 0x8000000A;
+	else
+		result = 0x80004005;
+	return result;
+}
+
+static HRESULT DeviceInIo(HANDLE hDevice, DWORD nioctl, void* buff, size_t buff_size)
+{
+	return DeviceIo(hDevice, nioctl, NULL, 0, buff, buff_size, NULL);
+}
+
+static HRESULT DeviceOutIo(HANDLE hDevice, DWORD nioctl, void* buff, size_t buff_size)
+{
+	return DeviceIo(hDevice, nioctl, buff, buff_size, NULL, 0, NULL);
+}
+
+static HRESULT DeviceInOutIo(HANDLE hDevice, DWORD nioctl, void* in_buff, size_t in_buff_size, void* out_buff, size_t out_buff_size)
+{
+	return DeviceIo(hDevice, nioctl, in_buff, in_buff_size, out_buff, out_buff_size, NULL);
+}
+
+static int parse_xboxone_buffer(GAMEPAD_STATE *state, struct buff_out_xbox_one_t* buff)
+{
+	int button;
+	int i;
+
+	for (i = XINPUT_GAMEPAD_DPAD_UP; i <= XINPUT_GAMEPAD_Y; i<<=1)
+	{
+		if (i == 0x0800)
+			continue;
+
+		switch (i)
+		{
+			case XINPUT_GAMEPAD_DPAD_UP       : button = BUTTON_DPAD_UP; break;
+			case XINPUT_GAMEPAD_DPAD_DOWN     : button = BUTTON_DPAD_DOWN; break;
+			case XINPUT_GAMEPAD_DPAD_LEFT     : button = BUTTON_DPAD_LEFT; break;
+			case XINPUT_GAMEPAD_DPAD_RIGHT    : button = BUTTON_DPAD_RIGHT; break;
+			case XINPUT_GAMEPAD_START         : button = BUTTON_START; break;
+			case XINPUT_GAMEPAD_BACK          : button = BUTTON_BACK; break;
+			case XINPUT_GAMEPAD_LEFT_THUMB    : button = BUTTON_LEFT_THUMB; break;
+			case XINPUT_GAMEPAD_RIGHT_THUMB   : button = BUTTON_RIGHT_THUMB; break;
+			case XINPUT_GAMEPAD_LEFT_SHOULDER : button = BUTTON_LEFT_SHOULDER; break;
+			case XINPUT_GAMEPAD_RIGHT_SHOULDER: button = BUTTON_RIGHT_SHOULDER; break;
+			//case XINPUT_GAMEPAD_GUIDE         : button = BUTTON_GUIDE; break;
+			case XINPUT_GAMEPAD_A             : button = BUTTON_A; break;
+			case XINPUT_GAMEPAD_B             : button = BUTTON_B; break;
+			case XINPUT_GAMEPAD_X             : button = BUTTON_X; break;
+			case XINPUT_GAMEPAD_Y             : button = BUTTON_Y; break;
+			default: button = 0;
+		}
+		if (buff->wButtons & i) {
+			state->bCurrent |= BUTTON_TO_FLAG(button);
+		}
+		else {
+			state->bCurrent ^= BUTTON_TO_FLAG(button);
+		}
+	}
+
+	state->stick[STICK_LEFT].x = buff->sThumbLX / (buff->sThumbLX > 0 ? 32767.0f : 32768.0f);
+	state->stick[STICK_LEFT].y = buff->sThumbLY / (buff->sThumbLY > 0 ? 32767.0f : 32768.0f);
+
+	state->stick[STICK_RIGHT].x = buff->sThumbRX / (buff->sThumbRX > 0 ? 32767.0f : 32768.0f);
+	state->stick[STICK_RIGHT].y = buff->sThumbRY / (buff->sThumbRY > 0 ? 32767.0f : 32768.0f);
+	
+	state->trigger[TRIGGER_LEFT].value  = buff->bLeftTrigger / 255.0f;
+	state->trigger[TRIGGER_RIGHT].value = buff->bRightTrigger / 255.0f;
+
+	return buff->status == 1;
+}
+
+static int parse_xbox_buffer(GAMEPAD_STATE* state, struct buff_out_xbox_t* buff)
+{
+	int button;
+	int i;
+
+	for (i = XINPUT_GAMEPAD_DPAD_UP; i <= XINPUT_GAMEPAD_Y; i<<=1)
+	{
+		switch (i)
+		{
+			case XINPUT_GAMEPAD_DPAD_UP       : button = BUTTON_DPAD_UP; break;
+			case XINPUT_GAMEPAD_DPAD_DOWN     : button = BUTTON_DPAD_DOWN; break;
+			case XINPUT_GAMEPAD_DPAD_LEFT     : button = BUTTON_DPAD_LEFT; break;
+			case XINPUT_GAMEPAD_DPAD_RIGHT    : button = BUTTON_DPAD_RIGHT; break;
+			case XINPUT_GAMEPAD_START         : button = BUTTON_START; break;
+			case XINPUT_GAMEPAD_BACK          : button = BUTTON_BACK; break;
+			case XINPUT_GAMEPAD_LEFT_THUMB    : button = BUTTON_LEFT_THUMB; break;
+			case XINPUT_GAMEPAD_RIGHT_THUMB   : button = BUTTON_RIGHT_THUMB; break;
+			case XINPUT_GAMEPAD_LEFT_SHOULDER : button = BUTTON_LEFT_SHOULDER; break;
+			case XINPUT_GAMEPAD_RIGHT_SHOULDER: button = BUTTON_RIGHT_SHOULDER; break;
+			//case XINPUT_GAMEPAD_GUIDE         : button = BUTTON_GUIDE; break;
+			case XINPUT_GAMEPAD_GUIDE         : continue;
+			case 0x0800                       : continue;
+			case XINPUT_GAMEPAD_A             : button = BUTTON_A; break;
+			case XINPUT_GAMEPAD_B             : button = BUTTON_B; break;
+			case XINPUT_GAMEPAD_X             : button = BUTTON_X; break;
+			case XINPUT_GAMEPAD_Y             : button = BUTTON_Y; break;
+			default: button = 0;
+		}
+		if (buff->wButtons & i) {
+			state->bCurrent |= BUTTON_TO_FLAG(button);
+		}
+		else {
+			state->bCurrent &= ~BUTTON_TO_FLAG(button);
+		}
+	}
+
+	state->stick[STICK_LEFT].x = buff->sThumbLX;
+	state->stick[STICK_LEFT].y = buff->sThumbLY;
+
+	state->stick[STICK_RIGHT].x = buff->sThumbRX;
+	state->stick[STICK_RIGHT].y = buff->sThumbRY;
+	
+	state->trigger[TRIGGER_LEFT].value  = buff->bLeftTrigger;
+	state->trigger[TRIGGER_RIGHT].value = buff->bRightTrigger;
+
+	return buff->status == 1;
+}
+
+static int get_gamepad_data(GAMEPAD_STATE* state)
+{
+	union
+	{
+		struct buff_out_xbox_t xboxOutBuff;
+		struct buff_out_xbox_one_t xboxOneOutBuff;
+	} out_buff;
+
+	union
+	{
+		struct buff_in_t xboxInBuff;
+		uint8_t xbonOneInBuff;
+	} in_buff;
+
+
+	DWORD inBuffSize;
+	DWORD outBuffSize;
+	unsigned int res;
+	int online;
+
+	memset(&out_buff, 0, sizeof(out_buff));
+	memset(&in_buff, 0, sizeof(in_buff));
+
+	if (state->type == 256)
+	{// I don't know if its xboxOne stuff
+		in_buff.xbonOneInBuff = 0;
+		inBuffSize = sizeof(in_buff.xbonOneInBuff);
+		outBuffSize = sizeof(out_buff.xboxOneOutBuff);
+	}
+	else
+	{
+		in_buff.xboxInBuff.field_0 = 257;
+		in_buff.xboxInBuff.field_2 = 0;
+		inBuffSize = sizeof(in_buff.xboxInBuff);
+		outBuffSize = sizeof(out_buff.xboxOutBuff);
+	}
+
+	res = DeviceInOutIo(state->hDevice, IOCTL_XINPUT_GET_DATA, &in_buff, inBuffSize, &out_buff, outBuffSize);
+	if (res < 0)
+		return 0;
+
+	if (state->type == 256)
+		online = parse_xboxone_buffer(state, &out_buff.xboxOneOutBuff);
+	else
+		online = parse_xbox_buffer(state, &out_buff.xboxOutBuff);
+
+	return online;
+}
+
+static int get_gamepad_infos(GAMEPAD_STATE* state)
+{
+	WORD buffer[6] = { 0 };
+	int success = (DeviceInIo(state->hDevice, IOCTL_XINPUT_INIT, buffer, sizeof(buffer)) >= 0 ? 1 : 0);
+	if (success)
+	{
+		if (!(buffer[2] & 0x80))
+		{
+			for (int i = 0; i < (buffer[1] & 0xFF); ++i)
+			{
+				state->type = buffer[0];
+				//id.vendorID = buffer[4];
+				//id.productID = buffer[5];
+
+				{
+					char buff[5] = { 0 };
+
+					buff[1] = 13;
+					buff[4] = 1;
+
+					DeviceOutIo(state->hDevice, IOCTL_XINPUT_SET_DATA, buff, sizeof(buff));
+				}
+			}
+		}
+	}
+	return success;
+}
+
+static void GamepadAddDevice(WCHAR* devPath);
+static void GamepadRemoveDevice(const char* devPath);
+
+static void GamepadDetect()
+{
+	HDEVINFO device_info_set;
+	SP_DEVICE_INTERFACE_DATA interface_data;
+	SP_DEVICE_INTERFACE_DETAIL_DATA_W* data;
+	DWORD detail_size = MAX_PATH * sizeof(WCHAR);
+	DWORD idx;
+
+	device_info_set = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_XINPUT, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
+
+	//HeapAlloc(GetProcessHeap(), 0, sizeof(*data) + detail_size);
+	data = (SP_DEVICE_INTERFACE_DETAIL_DATA_W*)malloc(sizeof(*data) + detail_size); 
+	data->cbSize = sizeof(*data);
+
+	ZeroMemory(&interface_data, sizeof(interface_data));
+	interface_data.cbSize = sizeof(interface_data);
+
+	idx = 0;
+	while (SetupDiEnumDeviceInterfaces(device_info_set, NULL, &GUID_DEVINTERFACE_XINPUT, idx++, &interface_data))
+	{
+		if (!SetupDiGetDeviceInterfaceDetailW(device_info_set,
+			&interface_data, data, sizeof(*data) + detail_size, NULL, NULL))
+			continue;
+
+		GamepadAddDevice(data->DevicePath);
+	}
+	free(data);
+	//HeapFree(GetProcessHeap(), 0, data);
+	SetupDiDestroyDeviceInfoList(device_info_set);
+
+	for (int i = 0; i != GAMEPAD_COUNT; ++i) {
+		if ((STATE[i].flags & FLAG_CONNECTED) && STATE[i].device) {
+			if (!get_gamepad_data(&STATE[i])) {
+				GamepadRemoveDevice(STATE[i].device);
+			}
+		}
+	}
+}
+
+
+
+/* Helper to add a new device */
+static void GamepadAddDevice(WCHAR* devPath) {
+	int controller = -1;
+	HANDLE hDevice;
+	int i;
+
+	/* try to find a free controller */
+	for (i = 0; i != GAMEPAD_COUNT; ++i) {
+		if ((STATE[i].flags & FLAG_CONNECTED) == 0 && controller == -1) {
+			controller = i;
+		}
+
+		if (STATE[i].device && wcscmp(devPath, STATE[i].device) == 0) {
+			return;
+		}
+	}
+
+	if (controller == -1) {
+		return;
+	}
+
+	hDevice = CreateFileW(devPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+	if (hDevice == NULL || hDevice == INVALID_HANDLE_VALUE)
+		return;
+
+	/* copy the device path */
+	STATE[controller].device = _wcsdup(devPath);
+	if (STATE[controller].device == NULL) {
+		CloseHandle(hDevice);
+		return;
+	}
+
+	STATE[controller].hDevice = hDevice;
+	if (get_gamepad_infos(&STATE[controller]) == 0) {
+		STATE[controller].hDevice = INVALID_HANDLE_VALUE;
+		CloseHandle(hDevice);
+		return;
+	}
+
+	/* reset device state */
+	GamepadResetState((GAMEPAD_DEVICE)controller);
+
+	STATE[controller].flags |= FLAG_CONNECTED;
+	
+}
+
+/* Helper to remove a device */
+static void GamepadRemoveDevice(WCHAR* devPath) {
 	int i;
 	for (i = 0; i != GAMEPAD_COUNT; ++i) {
-		STATE[i].flags = 0;
+		if (STATE[i].device != NULL && wcscmp(STATE[i].device, devPath) == 0) {
+			if (STATE[i].hDevice != INVALID_HANDLE_VALUE) {
+				CloseHandle(STATE[i].hDevice);
+				STATE[i].hDevice = INVALID_HANDLE_VALUE;
+			}
+			free(STATE[i].device);
+			STATE[i].device = NULL;
+			STATE[i].flags = 0;
+			break;
+		}
+	}
+}
+
+void GamepadInit(void) {
+	int i;
+
+	if (initialized == 0)
+	{
+		initialized = 1;
+		/* initialize connection state */
+		for (i = 0; i != GAMEPAD_COUNT; ++i) {
+			STATE[i].flags = 0;
+			STATE[i].hDevice = INVALID_HANDLE_VALUE;
+			STATE[i].device = NULL;
+		}
+
+		GamepadDetect();
 	}
 }
 
 void GamepadUpdate(void) {
+	static unsigned long last = 0;
+	unsigned long cur = time(NULL);
+
+	if (initialized == 0)
+		GamepadInit();
+
+	if (last + 2 < cur) {
+		GamepadDetect();
+		last = cur;
+	}
+
 	GamepadUpdateCommon();
 }
 
+static int adjust_values_trigger(double min, double max, double value)
+{
+	return (((value + (0 - min)) / (max - min)) * 255.0);
+}
+
+static int adjust_values_stick(double min, double max, double value)
+{
+	return (((value + (0 - min)) / (max - min)) * (65535.0)) - 32768.0;
+}
+
 static void GamepadUpdateDevice(GAMEPAD_DEVICE gamepad) {
-	XINPUT_STATE xs;
-	if (XInputGetState(gamepad, &xs) == 0) {
-		/* reset if the device was not already connected */
-		if ((STATE[gamepad].flags & FLAG_CONNECTED) == 0) {
-			GamepadResetState(gamepad);
-		}
-
-		/* mark that we are connected w/ rumble support */
-		STATE[gamepad].flags |= FLAG_CONNECTED|FLAG_RUMBLE;
-
-		/* update state */
-		STATE[gamepad].bCurrent = xs.Gamepad.wButtons;
-		STATE[gamepad].trigger[TRIGGER_LEFT].value = xs.Gamepad.bLeftTrigger;
-		STATE[gamepad].trigger[TRIGGER_RIGHT].value = xs.Gamepad.bRightTrigger;
-		STATE[gamepad].stick[STICK_LEFT].x = xs.Gamepad.sThumbLX;
-		STATE[gamepad].stick[STICK_LEFT].y = xs.Gamepad.sThumbLY;
-		STATE[gamepad].stick[STICK_RIGHT].x = xs.Gamepad.sThumbRX;
-		STATE[gamepad].stick[STICK_RIGHT].y = xs.Gamepad.sThumbRY;
-	} else {
-		/* disconnected */
-		STATE[gamepad].flags &= ~FLAG_CONNECTED;
+	if (STATE[gamepad].flags & FLAG_CONNECTED) {
+		get_gamepad_data(&STATE[gamepad]);
 	}
 }
 
 void GamepadShutdown(void) {
-	/* no Win32 shutdown required */
+	int i;
+
+	/* cleanup devices */
+	for (i = 0; i != GAMEPAD_COUNT; ++i) {
+		if (STATE[i].device != NULL) {
+			free(STATE[i].device);
+		}
+
+		if (STATE[i].hDevice != INVALID_HANDLE_VALUE) {
+			CloseHandle(STATE[i].hDevice);
+		}
+	}
 }
 
 void GamepadSetRumble(GAMEPAD_DEVICE gamepad, float left, float right, unsigned int rumble_length_ms) {
-	//TODO: rumble_length_ms
-	if ((STATE[gamepad].flags & FLAG_RUMBLE) != 0) {
-		XINPUT_VIBRATION vib;
-		ZeroMemory(&vib, sizeof(vib));
-		vib.wLeftMotorSpeed = (WORD)(left * 65535);
-		vib.wRightMotorSpeed = (WORD)(right * 65535);
-		XInputSetState(gamepad, &vib);
+	if (STATE[gamepad].hDevice != INVALID_HANDLE_VALUE) {
+		
 	}
 }
 
@@ -414,6 +845,9 @@ static int adjust_values_stick(double min, double max, double value)
 }
 
 static void GamepadUpdateDevice(GAMEPAD_DEVICE gamepad) {
+	if (gamepad >= GAMEPAD_COUNT)
+		return;
+
 	if (STATE[gamepad].flags & FLAG_CONNECTED) {
 		struct input_event events[32];
 		int i, len;
@@ -547,6 +981,9 @@ void GamepadShutdown(void) {
 }
 
 void GamepadSetRumble(GAMEPAD_DEVICE gamepad, float left, float right, unsigned int rumble_length_ms) {
+	if (gamepad >= GAMEPAD_COUNT)
+		return;
+
 	if (STATE[gamepad].fd != -1) {
 		struct input_event play;
 		struct ff_effect ff;
@@ -580,74 +1017,122 @@ void GamepadSetRumble(GAMEPAD_DEVICE gamepad, float left, float right, unsigned 
 #endif /* end of platform implementations */
 
 GAMEPAD_BOOL GamepadIsConnected(GAMEPAD_DEVICE device) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return (STATE[device].flags & FLAG_CONNECTED) != 0 ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 GAMEPAD_BOOL GamepadButtonDown(GAMEPAD_DEVICE device, GAMEPAD_BUTTON button) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return (STATE[device].bCurrent & BUTTON_TO_FLAG(button)) != 0 ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 GAMEPAD_BOOL GamepadButtonTriggered(GAMEPAD_DEVICE device, GAMEPAD_BUTTON button) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return ((STATE[device].bLast & BUTTON_TO_FLAG(button)) == 0 &&
 			(STATE[device].bCurrent & BUTTON_TO_FLAG(button)) != 0) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 GAMEPAD_BOOL GamepadButtonReleased(GAMEPAD_DEVICE device, GAMEPAD_BUTTON button) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return ((STATE[device].bCurrent & BUTTON_TO_FLAG(button)) == 0 &&
 			(STATE[device].bLast & BUTTON_TO_FLAG(button)) != 0) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 int GamepadTriggerValue(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+	if (device >= GAMEPAD_COUNT)
+		return 0;
+
 	return STATE[device].trigger[trigger].value;
 }
 
 float GamepadTriggerLength(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+	if (device >= GAMEPAD_COUNT)
+		return 0.0f;
+
 	return STATE[device].trigger[trigger].length;
 }
 
 GAMEPAD_BOOL GamepadTriggerDown(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return STATE[device].trigger[trigger].pressedCurrent;
 }
 
 GAMEPAD_BOOL GamepadTriggerTriggered(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return (STATE[device].trigger[trigger].pressedCurrent &&
 			!STATE[device].trigger[trigger].pressedLast) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 GAMEPAD_BOOL GamepadTriggerReleased(GAMEPAD_DEVICE device, GAMEPAD_TRIGGER trigger) {
+	if (device >= GAMEPAD_COUNT)
+		return GAMEPAD_FALSE;
+
 	return (!STATE[device].trigger[trigger].pressedCurrent &&
 			STATE[device].trigger[trigger].pressedLast) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 void GamepadStickXY(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, int *outX, int *outY) {
+	if (device >= GAMEPAD_COUNT)
+		return;
+
 	*outX = STATE[device].stick[stick].x;
 	*outY = STATE[device].stick[stick].y;
 }
 
 float GamepadStickLength(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
+	if (device >= GAMEPAD_COUNT)
+		return 0.0f;
+
 	return STATE[device].stick[stick].length;
 }
 
 void GamepadStickNormXY(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, float *outX, float *outY) {
+	if (device >= GAMEPAD_COUNT)
+		return;
+
 	*outX = STATE[device].stick[stick].nx;
 	*outY = STATE[device].stick[stick].ny;
 }
 
 float GamepadStickAngle(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
+	if (device >= GAMEPAD_COUNT)
+		return 0.0f;
+
 	return STATE[device].stick[stick].angle;
 }
 
 GAMEPAD_STICKDIR GamepadStickDir(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
+	if (device >= GAMEPAD_COUNT)
+		return STICKDIR_CENTER;
+
 	return STATE[device].stick[stick].dirCurrent;
 }
 
 GAMEPAD_BOOL GamepadStickDirTriggered(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, GAMEPAD_STICKDIR dir) {
+	if (device >= GAMEPAD_COUNT)
+		return;
+
 	return (STATE[device].stick[stick].dirCurrent == dir &&
 			STATE[device].stick[stick].dirCurrent != STATE[device].stick[stick].dirLast) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
 }
 
 /* initialize common gamepad state */
 static void GamepadResetState(GAMEPAD_DEVICE gamepad) {
+	if (gamepad >= GAMEPAD_COUNT)
+		return;
+
 	memset(STATE[gamepad].stick, 0, sizeof(STATE[gamepad].stick));
 	memset(STATE[gamepad].trigger, 0, sizeof(STATE[gamepad].trigger));
 	STATE[gamepad].bLast = STATE[gamepad].bCurrent = 0;
