@@ -396,8 +396,8 @@ static int get_gamepad_infos(GAMEPAD_STATE* state)
 	return success;
 }
 
-static void GamepadAddDevice(WCHAR* devPath);
-static void GamepadRemoveDevice(const char* devPath);
+static void GamepadAddDevice(const WCHAR* devPath);
+static void GamepadRemoveDevice(const WCHAR* devPath);
 
 static void GamepadDetect()
 {
@@ -441,7 +441,7 @@ static void GamepadDetect()
 
 
 /* Helper to add a new device */
-static void GamepadAddDevice(WCHAR* devPath) {
+static void GamepadAddDevice(const WCHAR* devPath) {
 	int controller = -1;
 	HANDLE hDevice;
 	int i;
@@ -487,7 +487,7 @@ static void GamepadAddDevice(WCHAR* devPath) {
 }
 
 /* Helper to remove a device */
-static void GamepadRemoveDevice(WCHAR* devPath) {
+static void GamepadRemoveDevice(const WCHAR* devPath) {
 	int i;
 	for (i = 0; i != GAMEPAD_COUNT; ++i) {
 		if (STATE[i].device != NULL && wcscmp(STATE[i].device, devPath) == 0) {
