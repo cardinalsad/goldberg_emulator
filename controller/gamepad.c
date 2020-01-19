@@ -81,8 +81,6 @@ struct GAMEPAD_STATE {
 /* State of the gamepads */
 static GAMEPAD_STATE STATE[GAMEPAD_COUNT];
 
-static int initialized = 0;
-
 /* Note whether a gamepad is currently connected */
 #define FLAG_CONNECTED	(1<<0)
 #define FLAG_RUMBLE		(1<<1)
@@ -523,26 +521,19 @@ static void GamepadRemoveDevice(const WCHAR* devPath) {
 void GamepadInit(void) {
 	int i;
 
-	if (initialized == 0)
-	{
-		initialized = 1;
-		/* initialize connection state */
-		for (i = 0; i != GAMEPAD_COUNT; ++i) {
-			STATE[i].flags = 0;
-			STATE[i].hDevice = INVALID_HANDLE_VALUE;
-			STATE[i].device = NULL;
-		}
-
-		GamepadDetect();
+	/* initialize connection state */
+	for (i = 0; i != GAMEPAD_COUNT; ++i) {
+		STATE[i].flags = 0;
+		STATE[i].hDevice = INVALID_HANDLE_VALUE;
+		STATE[i].device = NULL;
 	}
+
+	GamepadDetect();
 }
 
 void GamepadUpdate(void) {
 	static unsigned long last = 0;
 	unsigned long cur = time(NULL);
-
-	if (initialized == 0)
-		GamepadInit();
 
 	if (last + 2 < cur) {
 		GamepadDetect();
