@@ -704,7 +704,7 @@ static void GamepadAddDevice(const char* devPath) {
 		}
 	}
 
-	if (i == GAMEPAD_COUNT) {
+	if (controller == GAMEPAD_COUNT) {
 		return;
 	}
 
@@ -718,19 +718,18 @@ static void GamepadAddDevice(const char* devPath) {
 	}
 
 	/* copy the device path */
-	STATE[i].device = strdup(devPath);
-	if (STATE[i].device == NULL) {
+	STATE[controller].device = strdup(devPath);
+	if (STATE[controller].device == NULL) {
 		return;
 	}
 
 	/* reset device state */
-	GamepadResetState((GAMEPAD_DEVICE)i);
+	GamepadResetState((GAMEPAD_DEVICE)controller);
 
 	fcntl(fd, F_SETFL, O_NONBLOCK);
-	STATE[i].fd = fd;
-	STATE[i].flags |= FLAG_CONNECTED;
+	STATE[controller].fd = fd;
+	STATE[controller].flags |= FLAG_CONNECTED;
 
-	int controller = i;
 	{
 	int i, t;
 	unsigned long keybit[NBITS(KEY_MAX)] = { 0 };
