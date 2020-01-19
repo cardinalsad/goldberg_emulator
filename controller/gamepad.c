@@ -229,9 +229,6 @@ static int parse_xboxone_buffer(GAMEPAD_STATE *state, struct buff_out_xbox_one_t
 
 	for (i = XINPUT_GAMEPAD_DPAD_UP; i <= XINPUT_GAMEPAD_Y; i<<=1)
 	{
-		if (i == 0x0800)
-			continue;
-
 		switch (i)
 		{
 			case XINPUT_GAMEPAD_DPAD_UP       : button = BUTTON_DPAD_UP; break;
@@ -245,6 +242,8 @@ static int parse_xboxone_buffer(GAMEPAD_STATE *state, struct buff_out_xbox_one_t
 			case XINPUT_GAMEPAD_LEFT_SHOULDER : button = BUTTON_LEFT_SHOULDER; break;
 			case XINPUT_GAMEPAD_RIGHT_SHOULDER: button = BUTTON_RIGHT_SHOULDER; break;
 			//case XINPUT_GAMEPAD_GUIDE         : button = BUTTON_GUIDE; break;
+			case XINPUT_GAMEPAD_GUIDE         : continue;
+			case 0x0800                       : continue;
 			case XINPUT_GAMEPAD_A             : button = BUTTON_A; break;
 			case XINPUT_GAMEPAD_B             : button = BUTTON_B; break;
 			case XINPUT_GAMEPAD_X             : button = BUTTON_X; break;
@@ -255,18 +254,18 @@ static int parse_xboxone_buffer(GAMEPAD_STATE *state, struct buff_out_xbox_one_t
 			state->bCurrent |= BUTTON_TO_FLAG(button);
 		}
 		else {
-			state->bCurrent ^= BUTTON_TO_FLAG(button);
+			state->bCurrent &= ~BUTTON_TO_FLAG(button);
 		}
 	}
 
-	state->stick[STICK_LEFT].x = buff->sThumbLX / (buff->sThumbLX > 0 ? 32767.0f : 32768.0f);
-	state->stick[STICK_LEFT].y = buff->sThumbLY / (buff->sThumbLY > 0 ? 32767.0f : 32768.0f);
+	state->stick[STICK_LEFT].x = buff->sThumbLX;
+	state->stick[STICK_LEFT].y = buff->sThumbLY;
 
-	state->stick[STICK_RIGHT].x = buff->sThumbRX / (buff->sThumbRX > 0 ? 32767.0f : 32768.0f);
-	state->stick[STICK_RIGHT].y = buff->sThumbRY / (buff->sThumbRY > 0 ? 32767.0f : 32768.0f);
+	state->stick[STICK_RIGHT].x = buff->sThumbRX;
+	state->stick[STICK_RIGHT].y = buff->sThumbRY;
 	
-	state->trigger[TRIGGER_LEFT].value  = buff->bLeftTrigger / 255.0f;
-	state->trigger[TRIGGER_RIGHT].value = buff->bRightTrigger / 255.0f;
+	state->trigger[TRIGGER_LEFT].value  = buff->bLeftTrigger;
+	state->trigger[TRIGGER_RIGHT].value = buff->bRightTrigger;
 
 	return buff->status == 1;
 }
@@ -396,8 +395,25 @@ static int get_gamepad_infos(GAMEPAD_STATE* state)
 	return success;
 }
 
-static void GamepadAddDevice(const WCHAR* devPath);
-static void GamepadRemoveDevice(const WCHAR* devPath);
+static void send_gamepad_vibration(GAMEPAD_STATE *state, float left, float right, int rumble_length_ms)
+{
+	uint8_t buff[5] = { 0 };
+
+	if (left > 1.0f)
+		left = 1.0f;
+	if (right > 1.0f)
+		right = 1.0f;
+
+	buff[0] = 0;
+	buff[2] = (uint8_t)(left * 255.0f);
+	buff[3] = (uint8_t)(right * 255.0f);
+	buff[4] = 2;
+
+	DeviceOutIo(state->hDevice, IOCTL_XINPUT_SET_DATA, buff, sizeof(buff));
+}
+
+static void GamepadAddDevice(WCHAR* devPath);
+static void GamepadRemoveDevice(WCHAR* devPath);
 
 static void GamepadDetect()
 {
@@ -442,14 +458,15 @@ static void GamepadDetect()
 
 /* Helper to add a new device */
 static void GamepadAddDevice(const WCHAR* devPath) {
-	int controller = -1;
+	int controller = GAMEPAD_COUNT;
 	HANDLE hDevice;
 	int i;
 
 	/* try to find a free controller */
 	for (i = 0; i != GAMEPAD_COUNT; ++i) {
-		if ((STATE[i].flags & FLAG_CONNECTED) == 0 && controller == -1) {
+		if ((STATE[i].flags & FLAG_CONNECTED) == 0 && controller == GAMEPAD_COUNT) {
 			controller = i;
+			continue;
 		}
 
 		if (STATE[i].device && wcscmp(devPath, STATE[i].device) == 0) {
@@ -568,7 +585,7 @@ void GamepadShutdown(void) {
 
 void GamepadSetRumble(GAMEPAD_DEVICE gamepad, float left, float right, unsigned int rumble_length_ms) {
 	if (STATE[gamepad].hDevice != INVALID_HANDLE_VALUE) {
-		
+		send_gamepad_vibration(&STATE[gamepad], left, right, rumble_length_ms);
 	}
 }
 
@@ -673,11 +690,13 @@ static void GamepadDetect()
 /* Helper to add a new device */
 static void GamepadAddDevice(const char* devPath) {
 	int i;
+	int controller = GAMEPAD_COUNT;
 
 	/* try to find a free controller */
 	for (i = 0; i != GAMEPAD_COUNT; ++i) {
-		if ((STATE[i].flags & FLAG_CONNECTED) == 0) {
-			break;
+		if ((STATE[i].flags & FLAG_CONNECTED) == 0 && controller == GAMEPAD_COUNT) {
+			controller = i;
+			continue;
 		}
 
 		if (STATE[i].device && strcmp(devPath, STATE[i].device) == 0) {
@@ -1122,7 +1141,7 @@ GAMEPAD_STICKDIR GamepadStickDir(GAMEPAD_DEVICE device, GAMEPAD_STICK stick) {
 
 GAMEPAD_BOOL GamepadStickDirTriggered(GAMEPAD_DEVICE device, GAMEPAD_STICK stick, GAMEPAD_STICKDIR dir) {
 	if (device >= GAMEPAD_COUNT)
-		return;
+		return GAMEPAD_FALSE;
 
 	return (STATE[device].stick[stick].dirCurrent == dir &&
 			STATE[device].stick[stick].dirCurrent != STATE[device].stick[stick].dirLast) ? GAMEPAD_TRUE : GAMEPAD_FALSE;
