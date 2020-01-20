@@ -15,7 +15,11 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef __INCLUDED_STEAM_USER_STATS_H__
+#define __INCLUDED_STEAM_USER_STATS_H__
+
 #include "base.h"
+#include "../overlay_experimental/steam_overlay.h"
 
 #include <iomanip>
 #include <fstream>
@@ -47,6 +51,8 @@ private:
     Settings *settings;
     SteamCallResults *callback_results;
     class SteamCallBacks *callbacks;
+    class Steam_Overlay* overlay;
+
     std::vector<struct Steam_Leaderboard> leaderboards;
 
     nlohmann::json defined_achievements;
@@ -80,13 +86,14 @@ void save_achievements()
 }
 
 public:
-Steam_User_Stats(Settings *settings, Local_Storage *local_storage, class SteamCallResults *callback_results, class SteamCallBacks *callbacks):
+Steam_User_Stats(Settings *settings, Local_Storage *local_storage, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, Steam_Overlay* overlay):
     settings(settings),
     local_storage(local_storage),
     callback_results(callback_results),
     callbacks(callbacks),
     defined_achievements(nlohmann::json::object()),
-    user_achievements(nlohmann::json::object())
+    user_achievements(nlohmann::json::object()),
+    overlay(overlay)
 {
     load_achievements_db(); // achievements db
     load_achievements(); // achievements per user
@@ -238,6 +245,9 @@ bool SetAchievement( const char *pchName )
             if (user_achievements.find(pchName) == user_achievements.end() || user_achievements[pchName].value("earned", false) == false) {
                 user_achievements[pchName]["earned"] = true;
                 user_achievements[pchName]["earned_time"] = std::chrono::duration_cast<std::chrono::duration<uint32>>(std::chrono::system_clock::now().time_since_epoch()).count();
+#ifdef EMU_OVERLAY
+                overlay->AddAchievementNotification(it.value());
+#endif
                 save_achievements();
             }
 
@@ -842,3 +852,5 @@ int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) 
     return 0;
 }
 };
+
+#endif//__INCLUDED_STEAM_USER_STATS_H__

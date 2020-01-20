@@ -77,6 +77,26 @@ file(GLOB DETOURS_SRC_SHARED
 	detours/*.cpp
 )
 
+if(WIN32)
+  file(GLOB OVERLAY_EXPERIMENTAL_SRC_SHARED
+    overlay_experimental/*.cpp
+    overlay_experimental/windows/*.cpp
+    ImGui/*.cpp
+    ImGui/impls/*.cpp
+    ImGui/impls/windows/*.cpp
+    glew/glew.c
+  )
+elseif(UNIX)
+  file(GLOB OVERLAY_EXPERIMENTAL_SRC_SHARED
+    overlay_experimental/*.cpp
+    overlay_experimental/linux/*.cpp
+    ImGui/*.cpp
+    ImGui/impls/*.cpp
+    ImGui/impls/linux/*.cpp
+    glew/glew.c
+  )
+endif()
+
 ###################################################
 # Setup for the steam_api(64).dll / libsteam_api.so
 ###################################################
@@ -85,6 +105,7 @@ file(GLOB DETOURS_SRC_SHARED
 add_library(${LIB_STEAM_API}
   SHARED
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:${DETOURS_SRC_SHARED}>
+	$<$<AND:$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:${OVERLAY_EXPERIMENTAL_SRC_SHARED}>
   ${DLL_SRC_SHARED}
   ${PROTO_SRCS}
   ${PROTO_HDRS}
@@ -95,6 +116,8 @@ target_include_directories(${LIB_STEAM_API}
   PRIVATE
   ${PROTOBUF_INCLUDE_DIRS}
   ${CMAKE_CURRENT_BINARY_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/ImGui
+  ${CMAKE_CURRENT_SOURCE_DIR}/glew/include
 )
 
 # Link the required libraries
@@ -103,6 +126,8 @@ target_link_libraries(${LIB_STEAM_API}
 	protobuf::libprotobuf
 	$<$<BOOL:${WIN32}>:ws2_32>
 	$<$<BOOL:${WIN32}>:iphlpapi>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:opengl32.lib>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:Winmm.lib>
 )
 
 # Add target compile definitions
@@ -113,6 +138,8 @@ target_compile_definitions(${LIB_STEAM_API}
 	$<$<CONFIG:RelWithDebInfo>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:MinSizeRel>:EMU_RELEASE_BUILD>
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:EMU_EXPERIMENTAL_BUILD>
+	$<$<BOOL:${EMU_OVERLAY}>:EMU_OVERLAY>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:GLEW_STATIC>
 )
 
 # Install the target
