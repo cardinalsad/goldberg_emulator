@@ -112,7 +112,7 @@ std::recursive_mutex global_mutex;
 
 SteamAPICall_t generate_steam_api_call_id() {
     static SteamAPICall_t a;
-    randombytes(a);
+    randombytes((uint8_t*)&a, sizeof(a));
     ++a;
     if (a == 0) ++a;
     return a;
@@ -120,7 +120,7 @@ SteamAPICall_t generate_steam_api_call_id() {
 
 int generate_random_int() {
     int a;
-    randombytes(a);
+    randombytes((uint8_t*)&a, sizeof(a));
     return a;
 }
 
@@ -135,7 +135,7 @@ static uint32 generate_steam_ticket_id() {
 static unsigned generate_account_id()
 {
     int a;
-    randombytes(a);
+    randombytes((uint8_t*)&a, sizeof(a));
     a = abs(a);
     if (!a) ++a;
     return a;
