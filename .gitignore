@@ -14,15 +14,4 @@ base.lib
 rtlgenrandom*
 steamclient.exp
 steamclient.lib
-<<<<<<< .gitignore
-external
-.vs
-*.sln
-*.vcxproj*
-Debug
-Release
-Win32
-x64
-=======
 out/*
->>>>>>> .gitignore
