@@ -18,30 +18,36 @@
 #include "steam_client.h"
 #include "settings_parser.h"
 
-
+static std::condition_variable kill_background_thread_cv;
+static std::atomic_bool kill_background_thread;
 static void background_thread(Steam_Client *client)
 {
     PRINT_DEBUG("background thread starting\n");
+    std::mutex mtx;
+    std::unique_lock<std::mutex> lck(mtx);
+
     while (1) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        global_mutex.lock();
-        if (!client->network->isAlive()) {
-            global_mutex.unlock();
-            //delete network;
-            PRINT_DEBUG("background thread exit\n");
-            return;
+        if (kill_background_thread || kill_background_thread_cv.wait_for(lck, std::chrono::seconds(1)) != std::cv_status::timeout) {
+            if (kill_background_thread) {
+                PRINT_DEBUG("background thread exit\n");
+                return;
+            }
         }
 
-        PRINT_DEBUG("background thread run\n");
-        client->network->Run();
-        client->steam_matchmaking->RunBackground();
-        global_mutex.unlock();
+        unsigned long long time = std::chrono::duration_cast<std::chrono::duration<unsigned long long>>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+        if (time > client->last_cb_run + 1) {
+            global_mutex.lock();
+            PRINT_DEBUG("background thread run\n");
+            client->network->Run();
+            client->run_every_runcb->run();
+            global_mutex.unlock();
+        }
     }
 }
 
 Steam_Client::Steam_Client()
 {
-
     uint32 appid = create_localstorage_settings(&settings_client, &settings_server, &local_storage);
 
     network = new Networking(settings_server->get_local_steam_id(), appid, settings_server->get_port(), &(settings_server->custom_broadcasts), settings_server->disable_networking);
@@ -54,16 +60,19 @@ Steam_Client::Steam_Client()
 
     PRINT_DEBUG("steam client init: id: %llu server id: %llu appid: %u port: %u \n", settings_client->get_local_steam_id().ConvertToUint64(), settings_server->get_local_steam_id().ConvertToUint64(), appid, settings_server->get_port());
 
+    steam_overlay = new Steam_Overlay(settings_client, callback_results_client, callbacks_client, run_every_runcb, network);
+
     steam_user = new Steam_User(settings_client, local_storage, network, callback_results_client, callbacks_client);
-    steam_friends = new Steam_Friends(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
-    steam_utils = new Steam_Utils(settings_client, callback_results_client);
+    steam_friends = new Steam_Friends(settings_client, network, callback_results_client, callbacks_client, run_every_runcb, steam_overlay);
+    steam_utils = new Steam_Utils(settings_client, callback_results_client, steam_overlay);
+
     steam_matchmaking = new Steam_Matchmaking(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_matchmaking_servers = new Steam_Matchmaking_Servers(settings_client, network);
-    steam_user_stats = new Steam_User_Stats(settings_client, local_storage, callback_results_client, callbacks_client);
+    steam_user_stats = new Steam_User_Stats(settings_client, local_storage, callback_results_client, callbacks_client, steam_overlay);
     steam_apps = new Steam_Apps(settings_client, callback_results_client);
     steam_networking = new Steam_Networking(settings_client, network, callbacks_client, run_every_runcb);
     steam_remote_storage = new Steam_Remote_Storage(settings_client, local_storage, callback_results_client);
-    steam_screenshots = new Steam_Screenshots();
+    steam_screenshots = new Steam_Screenshots(local_storage, callbacks_client);
     steam_http = new Steam_HTTP(settings_client, network, callback_results_client, callbacks_client);
     steam_controller = new Steam_Controller(settings_client, callback_results_client, callbacks_client, run_every_runcb);
     steam_ugc = new Steam_UGC(settings_client, callback_results_client, callbacks_client);
@@ -76,16 +85,18 @@ Steam_Client::Steam_Client()
     steam_parental = new Steam_Parental();
     steam_networking_sockets = new Steam_Networking_Sockets(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_networking_sockets_serialized = new Steam_Networking_Sockets_Serialized(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
+    steam_networking_messages = new Steam_Networking_Messages(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_game_coordinator = new Steam_Game_Coordinator(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_networking_utils = new Steam_Networking_Utils(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_unified_messages = new Steam_Unified_Messages(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_game_search = new Steam_Game_Search(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_parties = new Steam_Parties(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
     steam_remoteplay = new Steam_RemotePlay(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
+    steam_tv = new Steam_TV(settings_client, network, callback_results_client, callbacks_client, run_every_runcb);
 
     PRINT_DEBUG("client init gameserver\n");
     steam_gameserver = new Steam_GameServer(settings_server, network, callbacks_server);
-    steam_gameserver_utils = new Steam_Utils(settings_server, callback_results_server);
+    steam_gameserver_utils = new Steam_Utils(settings_server, callback_results_server, steam_overlay);
     steam_gameserverstats = new Steam_GameServerStats(settings_server, network, callback_results_server, callbacks_server);
     steam_gameserver_networking = new Steam_Networking(settings_server, network, callbacks_server, run_every_runcb);
     steam_gameserver_http = new Steam_HTTP(settings_server, network, callback_results_server, callbacks_server);
@@ -94,9 +105,11 @@ Steam_Client::Steam_Client()
     steam_gameserver_apps = new Steam_Apps(settings_server, callback_results_server);
     steam_gameserver_networking_sockets = new Steam_Networking_Sockets(settings_server, network, callback_results_server, callbacks_server, run_every_runcb);
     steam_gameserver_networking_sockets_serialized = new Steam_Networking_Sockets_Serialized(settings_server, network, callback_results_server, callbacks_server, run_every_runcb);
+    steam_gameserver_networking_messages = new Steam_Networking_Messages(settings_server, network, callback_results_server, callbacks_server, run_every_runcb);
     steam_gameserver_game_coordinator = new Steam_Game_Coordinator(settings_server, network, callback_results_server, callbacks_server, run_every_runcb);
     steam_masterserver_updater = new Steam_Masterserver_Updater(settings_server, network, callback_results_server, callbacks_server, run_every_runcb);
 
+    last_cb_run = 0;
     PRINT_DEBUG("client init end\n");
 }
 
@@ -154,14 +167,24 @@ void Steam_Client::setAppID(uint32 appid)
 HSteamPipe Steam_Client::CreateSteamPipe()
 {
     PRINT_DEBUG("CreateSteamPipe\n");
-    return CLIENT_STEAM_PIPE;
+    HSteamPipe pipe = steam_pipe_counter++;
+    PRINT_DEBUG("creating pipe %i\n", pipe);
+
+    steam_pipes[pipe] = Steam_Pipe::NO_USER;
+    return pipe;
 }
 
 // Releases a previously created communications pipe
 // NOT THREADSAFE - ensure that no other threads are accessing Steamworks API when calling
 bool Steam_Client::BReleaseSteamPipe( HSteamPipe hSteamPipe )
 {
-    PRINT_DEBUG("BReleaseSteamPipe\n");
+    PRINT_DEBUG("BReleaseSteamPipe %i\n", hSteamPipe);
+    if (steam_pipes.count(hSteamPipe)) {
+        steam_pipes.erase(hSteamPipe);
+        return true;
+    }
+
+    return false;
 }
 
 // connects to an existing global user, failing if none exists
@@ -169,7 +192,17 @@ bool Steam_Client::BReleaseSteamPipe( HSteamPipe hSteamPipe )
 // NOT THREADSAFE - ensure that no other threads are accessing Steamworks API when calling
 HSteamUser Steam_Client::ConnectToGlobalUser( HSteamPipe hSteamPipe )
 {
-    PRINT_DEBUG("ConnectToGlobalUser\n");
+    PRINT_DEBUG("ConnectToGlobalUser %i\n", hSteamPipe);
+    if (!steam_pipes.count(hSteamPipe)) {
+        return 0;
+    }
+
+    userLogIn();
+#ifdef EMU_OVERLAY
+    if(!settings_client->disable_overlay)
+        steam_overlay->SetupOverlay();
+#endif
+    steam_pipes[hSteamPipe] = Steam_Pipe::CLIENT;
     return CLIENT_HSTEAMUSER;
 }
 
@@ -178,13 +211,19 @@ HSteamUser Steam_Client::ConnectToGlobalUser( HSteamPipe hSteamPipe )
 HSteamUser Steam_Client::CreateLocalUser( HSteamPipe *phSteamPipe, EAccountType eAccountType )
 {
     PRINT_DEBUG("CreateLocalUser %p %i\n", phSteamPipe, eAccountType);
-    if (eAccountType == k_EAccountTypeIndividual) {
-        if (phSteamPipe) *phSteamPipe = CLIENT_STEAM_PIPE;
-        return CLIENT_HSTEAMUSER;
-    } else {
-        if (phSteamPipe) *phSteamPipe = SERVER_STEAM_PIPE;
-        return SERVER_HSTEAMUSER;
-    }
+    //if (eAccountType == k_EAccountTypeIndividual) {
+        //Is this actually used?
+        //if (phSteamPipe) *phSteamPipe = CLIENT_STEAM_PIPE;
+        //return CLIENT_HSTEAMUSER;
+    //} else { //k_EAccountTypeGameServer
+    serverInit();
+
+    HSteamPipe pipe = CreateSteamPipe();
+    if (phSteamPipe) *phSteamPipe = pipe;
+    steam_pipes[pipe] = Steam_Pipe::SERVER;
+    steamclient_server_inited = true;
+    return SERVER_HSTEAMUSER;
+    //}
 }
 
 HSteamUser Steam_Client::CreateLocalUser( HSteamPipe *phSteamPipe )
@@ -197,13 +236,16 @@ HSteamUser Steam_Client::CreateLocalUser( HSteamPipe *phSteamPipe )
 void Steam_Client::ReleaseUser( HSteamPipe hSteamPipe, HSteamUser hUser )
 {
     PRINT_DEBUG("ReleaseUser\n");
+    if (hUser == SERVER_HSTEAMUSER && steam_pipes.count(hSteamPipe)) {
+        steamclient_server_inited = false;
+    }
 }
 
 // retrieves the ISteamUser interface associated with the handle
 ISteamUser *Steam_Client::GetISteamUser( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamUser %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "SteamUser009") == 0) {
         return (ISteamUser *)(void *)(ISteamUser009 *)steam_user;
@@ -227,6 +269,8 @@ ISteamUser *Steam_Client::GetISteamUser( HSteamUser hSteamUser, HSteamPipe hStea
         return (ISteamUser *)(void *)(ISteamUser018 *)steam_user;
     } else if (strcmp(pchVersion, "SteamUser019") == 0) {
         return (ISteamUser *)(void *)(ISteamUser019 *)steam_user;
+    } else if (strcmp(pchVersion, "SteamUser020") == 0) {
+        return (ISteamUser *)(void *)(ISteamUser020 *)steam_user;
     } else if (strcmp(pchVersion, STEAMUSER_INTERFACE_VERSION) == 0) {
         return (ISteamUser *)(void *)(ISteamUser *)steam_user;
     } else {
@@ -240,7 +284,7 @@ ISteamUser *Steam_Client::GetISteamUser( HSteamUser hSteamUser, HSteamPipe hStea
 ISteamGameServer *Steam_Client::GetISteamGameServer( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamGameServer %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "SteamGameServer005") == 0) {
         return (ISteamGameServer *)(void *)(ISteamGameServer005 *)steam_gameserver;
@@ -256,6 +300,8 @@ ISteamGameServer *Steam_Client::GetISteamGameServer( HSteamUser hSteamUser, HSte
         return (ISteamGameServer *)(void *)(ISteamGameServer010 *)steam_gameserver;
     } else if (strcmp(pchVersion, "SteamGameServer011") == 0) {
         return (ISteamGameServer *)(void *)(ISteamGameServer011 *)steam_gameserver;
+    } else if (strcmp(pchVersion, "SteamGameServer012") == 0) {
+        return (ISteamGameServer *)(void *)(ISteamGameServer012 *)steam_gameserver;
     } else if (strcmp(pchVersion, STEAMGAMESERVER_INTERFACE_VERSION) == 0) {
         return (ISteamGameServer *)(void *)(ISteamGameServer *)steam_gameserver;
     } else {
@@ -269,14 +315,19 @@ ISteamGameServer *Steam_Client::GetISteamGameServer( HSteamUser hSteamUser, HSte
 // this must be set before CreateLocalUser()
 void Steam_Client::SetLocalIPBinding( uint32 unIP, uint16 usPort )
 {
-    PRINT_DEBUG("SetLocalIPBinding %u %hu\n", unIP, usPort);
+    PRINT_DEBUG("SetLocalIPBinding old %u %hu\n", unIP, usPort);
+}
+
+void Steam_Client::SetLocalIPBinding( const SteamIPAddress_t &unIP, uint16 usPort )
+{
+    PRINT_DEBUG("SetLocalIPBinding %i %u %hu\n", unIP.m_eType, unIP.m_unIPv4, usPort);
 }
 
 // returns the ISteamFriends interface
 ISteamFriends *Steam_Client::GetISteamFriends( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamFriends %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "SteamFriends004") == 0) {
         return (ISteamFriends *)(void *)(ISteamFriends004 *)steam_friends;
@@ -317,11 +368,11 @@ ISteamFriends *Steam_Client::GetISteamFriends( HSteamUser hSteamUser, HSteamPipe
 ISteamUtils *Steam_Client::GetISteamUtils( HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamUtils %s\n", pchVersion);
-    if (!hSteamPipe) return NULL;
+    if (!steam_pipes.count(hSteamPipe)) return NULL;
 
     Steam_Utils *steam_utils_temp;
 
-    if (hSteamPipe == SERVER_STEAM_PIPE) {
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         steam_utils_temp = steam_gameserver_utils;
     } else {
         steam_utils_temp = steam_utils;
@@ -341,6 +392,8 @@ ISteamUtils *Steam_Client::GetISteamUtils( HSteamPipe hSteamPipe, const char *pc
         return (ISteamUtils *)(void *)(ISteamUtils007 *)steam_utils_temp;
     } else if (strcmp(pchVersion, "SteamUtils008") == 0) {
         return (ISteamUtils *)(void *)(ISteamUtils008 *)steam_utils_temp;
+    } else if (strcmp(pchVersion, "SteamUtils009") == 0) {
+        return (ISteamUtils *)(void *)(ISteamUtils009 *)steam_utils_temp;
     } else if (strcmp(pchVersion, STEAMUTILS_INTERFACE_VERSION) == 0) {
         return (ISteamUtils *)(void *)(ISteamUtils *)steam_utils_temp;
     } else {
@@ -354,7 +407,7 @@ ISteamUtils *Steam_Client::GetISteamUtils( HSteamPipe hSteamPipe, const char *pc
 ISteamMatchmaking *Steam_Client::GetISteamMatchmaking( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamMatchmaking %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "SteamMatchMaking001") == 0) {
         //TODO
@@ -391,7 +444,7 @@ ISteamMatchmaking *Steam_Client::GetISteamMatchmaking( HSteamUser hSteamUser, HS
 ISteamMatchmakingServers *Steam_Client::GetISteamMatchmakingServers( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamMatchmakingServers %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
     return steam_matchmaking_servers;
 }
 
@@ -399,10 +452,10 @@ ISteamMatchmakingServers *Steam_Client::GetISteamMatchmakingServers( HSteamUser 
 void *Steam_Client::GetISteamGenericInterface( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamGenericInterface %s\n", pchVersion);
-    if (!hSteamPipe) return NULL;
+    if (!steam_pipes.count(hSteamPipe)) return NULL;
 
     bool server = false;
-    if (hSteamUser == SERVER_HSTEAMUSER) {
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         server = true;
     } else {
         if ((strstr(pchVersion, "SteamNetworkingUtils") != pchVersion) && (strstr(pchVersion, "SteamUtils") != pchVersion)) {
@@ -422,8 +475,10 @@ void *Steam_Client::GetISteamGenericInterface( HSteamUser hSteamUser, HSteamPipe
             return (void *)(ISteamNetworkingSocketsSerialized002 *)steam_networking_sockets_serialized_temp;
         } else if (strcmp(pchVersion, "SteamNetworkingSocketsSerialized003") == 0) {
             return (void *)(ISteamNetworkingSocketsSerialized003 *)steam_networking_sockets_serialized_temp;
+        } else if (strcmp(pchVersion, "SteamNetworkingSocketsSerialized004") == 0) {
+            return (void *)(ISteamNetworkingSocketsSerialized004 *)steam_networking_sockets_serialized_temp;
         } else {
-            return (void *)(ISteamNetworkingSocketsSerialized003 *)steam_networking_sockets_serialized_temp;
+            return (void *)(ISteamNetworkingSocketsSerialized004 *)steam_networking_sockets_serialized_temp;
         }
     } else if (strstr(pchVersion, "SteamNetworkingSockets") == pchVersion) {
         Steam_Networking_Sockets *steam_networking_sockets_temp;
@@ -437,9 +492,24 @@ void *Steam_Client::GetISteamGenericInterface( HSteamUser hSteamUser, HSteamPipe
             return (void *)(ISteamNetworkingSockets001 *) steam_networking_sockets_temp;
         } else if (strcmp(pchVersion, "SteamNetworkingSockets002") == 0) {
             return (void *)(ISteamNetworkingSockets002 *) steam_networking_sockets_temp;
+        } else if (strcmp(pchVersion, "SteamNetworkingSockets003") == 0) {
+            return (void *)(ISteamNetworkingSockets003 *) steam_networking_sockets_temp;
+        } else if (strcmp(pchVersion, "SteamNetworkingSockets006") == 0) {
+            return (void *)(ISteamNetworkingSockets006 *) steam_networking_sockets_temp;
+        } else if (strcmp(pchVersion, "SteamNetworkingSockets008") == 0) {
+            return (void *)(ISteamNetworkingSockets008 *) steam_networking_sockets_temp;
         } else {
             return (void *)(ISteamNetworkingSockets *) steam_networking_sockets_temp;
         }
+    } else if (strstr(pchVersion, "SteamNetworkingMessages") == pchVersion) {
+        Steam_Networking_Messages *steam_networking_messages_temp;
+        if (server) {
+            steam_networking_messages_temp = steam_gameserver_networking_messages;
+        } else {
+            steam_networking_messages_temp = steam_networking_messages;
+        }
+
+        return (void *)(ISteamNetworkingMessages *)steam_networking_messages_temp;
     } else if (strstr(pchVersion, "SteamGameCoordinator") == pchVersion) {
         Steam_Game_Coordinator *steam_game_coordinator_temp;
         if (server) {
@@ -449,9 +519,13 @@ void *Steam_Client::GetISteamGenericInterface( HSteamUser hSteamUser, HSteamPipe
         }
 
         return (void *)(ISteamGameCoordinator *)steam_game_coordinator_temp;
+    } else if (strstr(pchVersion, STEAMTV_INTERFACE_VERSION) == pchVersion) {
+        return (void *)(ISteamTV *)steam_tv;
     } else if (strstr(pchVersion, "SteamNetworkingUtils") == pchVersion) {
             if (strcmp(pchVersion, "SteamNetworkingUtils001") == 0) {
                 return (void *)(ISteamNetworkingUtils001 *)steam_networking_utils;
+            } else if (strcmp(pchVersion, "SteamNetworkingUtils002") == 0) {
+                return (void *)(ISteamNetworkingUtils002 *)steam_networking_utils;
             } else if (strcmp(pchVersion, STEAMNETWORKINGUTILS_INTERFACE_VERSION) == 0) {
                 return (void *)(ISteamNetworkingUtils *)steam_networking_utils;
             } else {
@@ -524,7 +598,7 @@ void *Steam_Client::GetISteamGenericInterface( HSteamUser hSteamUser, HSteamPipe
 ISteamUserStats *Steam_Client::GetISteamUserStats( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamUserStats %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "STEAMUSERSTATS_INTERFACE_VERSION001") == 0) {
         //TODO
@@ -548,6 +622,8 @@ ISteamUserStats *Steam_Client::GetISteamUserStats( HSteamUser hSteamUser, HSteam
         return (ISteamUserStats *)(void *)(ISteamUserStats009 *)steam_user_stats;
     } else if (strcmp(pchVersion, "STEAMUSERSTATS_INTERFACE_VERSION010") == 0) {
         return (ISteamUserStats *)(void *)(ISteamUserStats010 *)steam_user_stats;
+    } else if (strcmp(pchVersion, "STEAMUSERSTATS_INTERFACE_VERSION011") == 0) {
+        return (ISteamUserStats *)(void *)(ISteamUserStats011 *)steam_user_stats;
     } else if (strcmp(pchVersion, STEAMUSERSTATS_INTERFACE_VERSION) == 0) {
         return (ISteamUserStats *)(void *)(ISteamUserStats *)steam_user_stats;
     } else {
@@ -561,7 +637,7 @@ ISteamUserStats *Steam_Client::GetISteamUserStats( HSteamUser hSteamUser, HSteam
 ISteamGameServerStats *Steam_Client::GetISteamGameServerStats( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamGameServerStats %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_gameserverstats;
 }
 
@@ -569,9 +645,31 @@ ISteamGameServerStats *Steam_Client::GetISteamGameServerStats( HSteamUser hSteam
 ISteamApps *Steam_Client::GetISteamApps( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamApps %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
-    if (hSteamUser == SERVER_HSTEAMUSER) {
-        return steam_gameserver_apps;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
+
+    Steam_Apps *steam_apps_temp;
+
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
+        steam_apps_temp = steam_gameserver_apps;
+    } else {
+        steam_apps_temp = steam_apps;
+    }
+    if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION002") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps002 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION003") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps003 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION004") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps004 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION005") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps005 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION006") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps006 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, "STEAMAPPS_INTERFACE_VERSION007") == 0) {
+        return (ISteamApps *)(void *)(ISteamApps007 *)steam_apps_temp;
+    } else if (strcmp(pchVersion, STEAMAPPS_INTERFACE_VERSION) == 0) {
+        return (ISteamApps *)(void *)(ISteamApps *)steam_apps_temp;
+    } else {
+        return (ISteamApps *)(void *)(ISteamApps *)steam_apps_temp;
     }
 
     return steam_apps;
@@ -581,11 +679,11 @@ ISteamApps *Steam_Client::GetISteamApps( HSteamUser hSteamUser, HSteamPipe hStea
 ISteamNetworking *Steam_Client::GetISteamNetworking( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamNetworking %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     Steam_Networking *steam_networking_temp;
 
-    if (hSteamUser == SERVER_HSTEAMUSER) {
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         steam_networking_temp = steam_gameserver_networking;
     } else {
         steam_networking_temp = steam_networking;
@@ -599,7 +697,9 @@ ISteamNetworking *Steam_Client::GetISteamNetworking( HSteamUser hSteamUser, HSte
         return (ISteamNetworking *)(void *)(ISteamNetworking003 *)steam_networking_temp;
     } else if (strcmp(pchVersion, "SteamNetworking004") == 0) {
         return (ISteamNetworking *)(void *)(ISteamNetworking004 *)steam_networking_temp;
-    } else if (strcmp(pchVersion, STEAMUGC_INTERFACE_VERSION) == 0) {
+    } else if (strcmp(pchVersion, "SteamNetworking005") == 0) {
+        return (ISteamNetworking *)(void *)(ISteamNetworking005 *)steam_networking_temp;
+    } else if (strcmp(pchVersion, STEAMNETWORKING_INTERFACE_VERSION) == 0) {
         return (ISteamNetworking *)(void *)(ISteamNetworking *)steam_networking_temp;
     } else {
         return (ISteamNetworking *)(void *)(ISteamNetworking *)steam_networking_temp;
@@ -612,7 +712,7 @@ ISteamNetworking *Steam_Client::GetISteamNetworking( HSteamUser hSteamUser, HSte
 ISteamRemoteStorage *Steam_Client::GetISteamRemoteStorage( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamRemoteStorage %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
 
     if (strcmp(pchVersion, "STEAMREMOTESTORAGE_INTERFACE_VERSION001") == 0) {
         return (ISteamRemoteStorage *)(void *)(ISteamRemoteStorage001 *)steam_remote_storage;
@@ -653,7 +753,7 @@ ISteamRemoteStorage *Steam_Client::GetISteamRemoteStorage( HSteamUser hSteamuser
 ISteamScreenshots *Steam_Client::GetISteamScreenshots( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamScreenshots %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_screenshots;
 }
 
@@ -661,7 +761,7 @@ ISteamScreenshots *Steam_Client::GetISteamScreenshots( HSteamUser hSteamuser, HS
 // Deprecated. Applications should use SteamAPI_RunCallbacks() or SteamGameServer_RunCallbacks() instead.
 void Steam_Client::RunFrame()
 {
-    PRINT_DEBUG("RunFrame\n");
+    PRINT_DEBUG("Steam_Client::RunFrame\n");
 }
 
 // returns the number of IPC calls made since the last time this function was called
@@ -687,15 +787,26 @@ void Steam_Client::SetWarningMessageHook( SteamAPIWarningMessageHook_t pFunction
 bool Steam_Client::BShutdownIfAllPipesClosed()
 {
     PRINT_DEBUG("BShutdownIfAllPipesClosed\n");
-    return true;
+    if (!steam_pipes.size()) {
+        if (background_keepalive.joinable()) {
+            kill_background_thread = true;
+            kill_background_thread_cv.notify_one();
+            background_keepalive.join();
+        }
+
+        PRINT_DEBUG("all pipes closed\n");
+        return true;
+    }
+
+    return false;
 }
 
 // Expose HTTP interface
 ISteamHTTP *Steam_Client::GetISteamHTTP( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamHTTP %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
-    if (hSteamuser == SERVER_HSTEAMUSER) {
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         return steam_gameserver_http;
     }
 
@@ -706,14 +817,14 @@ ISteamHTTP *Steam_Client::GetISteamHTTP( HSteamUser hSteamuser, HSteamPipe hStea
 void *Steam_Client::DEPRECATED_GetISteamUnifiedMessages( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion ) 
 {
     PRINT_DEBUG("DEPRECATED_GetISteamUnifiedMessages %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return (void *)(ISteamUnifiedMessages *)steam_unified_messages;
 }
 
 ISteamUnifiedMessages *Steam_Client::GetISteamUnifiedMessages( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamUnifiedMessages %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_unified_messages;
 }
 
@@ -721,7 +832,7 @@ ISteamUnifiedMessages *Steam_Client::GetISteamUnifiedMessages( HSteamUser hSteam
 ISteamController *Steam_Client::GetISteamController( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamController %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     if (strcmp(pchVersion, "STEAMCONTROLLER_INTERFACE_VERSION") == 0) {
         return (ISteamController *)(void *)(ISteamController001 *)steam_controller;
@@ -749,10 +860,10 @@ ISteamController *Steam_Client::GetISteamController( HSteamUser hSteamUser, HSte
 ISteamUGC *Steam_Client::GetISteamUGC( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamUGC %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
     Steam_UGC *steam_ugc_temp;
 
-    if (hSteamUser == SERVER_HSTEAMUSER) {
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         steam_ugc_temp = steam_gameserver_ugc;
     } else {
         steam_ugc_temp = steam_ugc;
@@ -786,6 +897,8 @@ ISteamUGC *Steam_Client::GetISteamUGC( HSteamUser hSteamUser, HSteamPipe hSteamP
         return (ISteamUGC *)(void *)(ISteamUGC012 *)steam_ugc_temp;
     } else if (strcmp(pchVersion, "STEAMUGC_INTERFACE_VERSION012") == 0) {
         return (ISteamUGC *)(void *)(ISteamUGC012 *)steam_ugc_temp;
+    } else if (strcmp(pchVersion, "STEAMUGC_INTERFACE_VERSION013") == 0) {
+        return (ISteamUGC *)(void *)(ISteamUGC013 *)steam_ugc_temp;
     } else if (strcmp(pchVersion, STEAMUGC_INTERFACE_VERSION) == 0) {
         return (ISteamUGC *)(void *)(ISteamUGC *)steam_ugc_temp;
     } else {
@@ -799,7 +912,7 @@ ISteamUGC *Steam_Client::GetISteamUGC( HSteamUser hSteamUser, HSteamPipe hSteamP
 ISteamAppList *Steam_Client::GetISteamAppList( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamAppList %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
     return steam_applist;
 }
 
@@ -807,7 +920,7 @@ ISteamAppList *Steam_Client::GetISteamAppList( HSteamUser hSteamUser, HSteamPipe
 ISteamMusic *Steam_Client::GetISteamMusic( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamMusic %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_music;
 }
 
@@ -815,7 +928,7 @@ ISteamMusic *Steam_Client::GetISteamMusic( HSteamUser hSteamuser, HSteamPipe hSt
 ISteamMusicRemote *Steam_Client::GetISteamMusicRemote(HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion)
 {
     PRINT_DEBUG("GetISteamMusicRemote %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_musicremote;
 }
 
@@ -823,7 +936,7 @@ ISteamMusicRemote *Steam_Client::GetISteamMusicRemote(HSteamUser hSteamuser, HSt
 ISteamHTMLSurface *Steam_Client::GetISteamHTMLSurface(HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion)
 {
     PRINT_DEBUG("GetISteamHTMLSurface %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
 
     if (strcmp(pchVersion, "STEAMHTMLSURFACE_INTERFACE_VERSION_001") == 0) {
         return (ISteamHTMLSurface *)(void *)(ISteamHTMLSurface001 *)steam_HTMLsurface;
@@ -872,13 +985,13 @@ void Steam_Client::Remove_SteamAPI_CPostAPIResultInProcess( SteamAPI_PostAPIResu
 ISteamInventory *Steam_Client::GetISteamInventory( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamInventory %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     Steam_Inventory *steam_inventory_temp;
     Settings *settings_temp;
     SteamCallBacks *callbacks_temp;
     SteamCallResults *callback_results_temp;
 
-    if (hSteamuser == SERVER_HSTEAMUSER) {
+    if (steam_pipes[hSteamPipe] == Steam_Pipe::SERVER) {
         steam_inventory_temp = steam_gameserver_inventory;
     } else {
         steam_inventory_temp = steam_inventory;
@@ -901,7 +1014,7 @@ ISteamInventory *Steam_Client::GetISteamInventory( HSteamUser hSteamuser, HSteam
 ISteamVideo *Steam_Client::GetISteamVideo( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamVideo %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_video;
 }
 
@@ -909,21 +1022,21 @@ ISteamVideo *Steam_Client::GetISteamVideo( HSteamUser hSteamuser, HSteamPipe hSt
 ISteamParentalSettings *Steam_Client::GetISteamParentalSettings( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamParentalSettings %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
     return steam_parental;
 }
 
 ISteamMasterServerUpdater *Steam_Client::GetISteamMasterServerUpdater( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamMasterServerUpdater %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
     return steam_masterserver_updater;
 }
 
 ISteamContentServer *Steam_Client::GetISteamContentServer( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamContentServer %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
     return NULL;
 }
 
@@ -931,7 +1044,7 @@ ISteamContentServer *Steam_Client::GetISteamContentServer( HSteamUser hSteamUser
 ISteamGameSearch *Steam_Client::GetISteamGameSearch( HSteamUser hSteamuser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamGameSearch %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamuser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamuser) return NULL;
 
     return steam_game_search;
 }
@@ -940,7 +1053,7 @@ ISteamGameSearch *Steam_Client::GetISteamGameSearch( HSteamUser hSteamuser, HSte
 ISteamInput *Steam_Client::GetISteamInput( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamInput %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     return steam_controller;
 }
@@ -949,7 +1062,7 @@ ISteamInput *Steam_Client::GetISteamInput( HSteamUser hSteamUser, HSteamPipe hSt
 ISteamParties *Steam_Client::GetISteamParties( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamParties %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     return steam_parties;
 }
@@ -957,7 +1070,7 @@ ISteamParties *Steam_Client::GetISteamParties( HSteamUser hSteamUser, HSteamPipe
 ISteamRemotePlay *Steam_Client::GetISteamRemotePlay( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion )
 {
     PRINT_DEBUG("GetISteamRemotePlay %s\n", pchVersion);
-    if (!hSteamPipe || !hSteamUser) return NULL;
+    if (!steam_pipes.count(hSteamPipe) || !hSteamUser) return NULL;
 
     return steam_remoteplay;
 }
@@ -1452,6 +1565,11 @@ void Steam_Client::RunCallbacks(bool runClientCB, bool runGameserverCB)
     callbacks_server->runCallBacks();
     PRINT_DEBUG("Steam_Client::RunCallbacks callbacks_client\n");
     callbacks_client->runCallBacks();
+    last_cb_run = std::chrono::duration_cast<std::chrono::duration<unsigned long long>>(std::chrono::system_clock::now().time_since_epoch()).count();
     PRINT_DEBUG("Steam_Client::RunCallbacks done\n");
-    
+}
+
+void Steam_Client::DestroyAllInterfaces()
+{
+    PRINT_DEBUG("Steam_Client::DestroyAllInterfaces\n");
 }

@@ -15,11 +15,11 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "base.h"
+#ifndef __INCLUDED_STEAM_USER_STATS_H__
+#define __INCLUDED_STEAM_USER_STATS_H__
 
-#include <iomanip>
-#include <fstream>
-#include "../json/json.hpp"
+#include "base.h"
+#include "../overlay_experimental/steam_overlay.h"
 
 struct Steam_Leaderboard {
     std::string name;
@@ -36,6 +36,7 @@ public ISteamUserStats007,
 public ISteamUserStats008,
 public ISteamUserStats009,
 public ISteamUserStats010,
+public ISteamUserStats011,
 public ISteamUserStats
 {
 public:
@@ -47,6 +48,8 @@ private:
     Settings *settings;
     SteamCallResults *callback_results;
     class SteamCallBacks *callbacks;
+    class Steam_Overlay* overlay;
+
     std::vector<struct Steam_Leaderboard> leaderboards;
 
     nlohmann::json defined_achievements;
@@ -80,13 +83,14 @@ void save_achievements()
 }
 
 public:
-Steam_User_Stats(Settings *settings, Local_Storage *local_storage, class SteamCallResults *callback_results, class SteamCallBacks *callbacks):
+Steam_User_Stats(Settings *settings, Local_Storage *local_storage, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, Steam_Overlay* overlay):
     settings(settings),
     local_storage(local_storage),
     callback_results(callback_results),
     callbacks(callbacks),
     defined_achievements(nlohmann::json::object()),
-    user_achievements(nlohmann::json::object())
+    user_achievements(nlohmann::json::object()),
+    overlay(overlay)
 {
     load_achievements_db(); // achievements db
     load_achievements(); // achievements per user
@@ -238,6 +242,9 @@ bool SetAchievement( const char *pchName )
             if (user_achievements.find(pchName) == user_achievements.end() || user_achievements[pchName].value("earned", false) == false) {
                 user_achievements[pchName]["earned"] = true;
                 user_achievements[pchName]["earned_time"] = std::chrono::duration_cast<std::chrono::duration<uint32>>(std::chrono::system_clock::now().time_since_epoch()).count();
+#ifdef EMU_OVERLAY
+                overlay->AddAchievementNotification(it.value());
+#endif
                 save_achievements();
             }
 
@@ -293,7 +300,7 @@ bool GetAchievementAndUnlockTime( const char *pchName, bool *pbAchieved, uint32 
 
     if(pbAchieved != nullptr) *pbAchieved = false;
     if(punUnlockTime != nullptr) *punUnlockTime = 0;
-    return true;
+    return false;
 }
 
 
@@ -312,7 +319,7 @@ bool StoreStats()
     UserStatsStored_t data;
     data.m_nGameID = settings->get_local_game_id().ToUint64();
     data.m_eResult = k_EResultOK;
-    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), 0.01);
     return true;
 }
 
@@ -768,6 +775,7 @@ STEAM_CALL_RESULT( GlobalAchievementPercentagesReady_t )
 SteamAPICall_t RequestGlobalAchievementPercentages()
 {
     PRINT_DEBUG("RequestGlobalAchievementPercentages\n");
+    return 0;
 }
 
 
@@ -777,6 +785,7 @@ SteamAPICall_t RequestGlobalAchievementPercentages()
 int GetMostAchievedAchievementInfo( char *pchName, uint32 unNameBufLen, float *pflPercent, bool *pbAchieved )
 {
     PRINT_DEBUG("GetMostAchievedAchievementInfo\n");
+    return -1;
 }
 
 
@@ -786,6 +795,7 @@ int GetMostAchievedAchievementInfo( char *pchName, uint32 unNameBufLen, float *p
 int GetNextMostAchievedAchievementInfo( int iIteratorPrevious, char *pchName, uint32 unNameBufLen, float *pflPercent, bool *pbAchieved )
 {
     PRINT_DEBUG("GetNextMostAchievedAchievementInfo\n");
+    return -1;
 }
 
 
@@ -793,6 +803,7 @@ int GetNextMostAchievedAchievementInfo( int iIteratorPrevious, char *pchName, ui
 bool GetAchievementAchievedPercent( const char *pchName, float *pflPercent )
 {
     PRINT_DEBUG("GetAchievementAchievedPercent\n");
+    return false;
 }
 
 
@@ -841,4 +852,23 @@ int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) 
     PRINT_DEBUG("GetGlobalStatHistory double %s\n", pchStatName);
     return 0;
 }
+
+// For achievements that have related Progress stats, use this to query what the bounds of that progress are.
+// You may want this info to selectively call IndicateAchievementProgress when appropriate milestones of progress
+// have been made, to show a progress notification to the user.
+bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress )
+{
+    PRINT_DEBUG("GetAchievementProgressLimits int\n");
+    return false;
+}
+
+bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress )
+{
+    PRINT_DEBUG("GetAchievementProgressLimits float\n");
+    return false;
+}
+
+
 };
+
+#endif//__INCLUDED_STEAM_USER_STATS_H__

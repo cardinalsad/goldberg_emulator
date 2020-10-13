@@ -17,13 +17,7 @@
 
 #include "base.h"
 
-#ifdef STEAM_WIN32
-#include <windows.h>
-#include <direct.h>
-
-#define SystemFunction036 NTAPI SystemFunction036
-#include <ntsecapi.h>
-#undef SystemFunction036
+#ifdef __WINDOWS__
 
 static void
 randombytes(char * const buf, const size_t size)
@@ -45,11 +39,6 @@ std::string get_env_variable(std::string name)
 }
 
 #else
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 static int fd = -1;
 
@@ -126,32 +115,42 @@ static unsigned generate_account_id()
 
 CSteamID generate_steam_id_user()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeIndividual);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeIndividual);
 }
 
 static CSteamID generate_steam_anon_user()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeAnonUser);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeAnonUser);
 }
 
 CSteamID generate_steam_id_server()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeGameServer);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeGameServer);
 }
 
 CSteamID generate_steam_id_anonserver()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeAnonGameServer);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeAnonGameServer);
 }
 
 CSteamID generate_steam_id_lobby()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance | k_EChatInstanceFlagLobby, k_EUniversePublic, k_EAccountTypeChat);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance | k_EChatInstanceFlagLobby, k_EUniversePublic, k_EAccountTypeChat);
 }
 
-#ifndef STEAM_WIN32
-#include <sys/types.h>
-#include <dirent.h>
+bool check_timedout(std::chrono::high_resolution_clock::time_point old, double timeout)
+{
+    if (timeout == 0.0) return true;
+
+    std::chrono::high_resolution_clock::time_point now = std::chrono::high_resolution_clock::now();
+    if (std::chrono::duration_cast<std::chrono::duration<double>>(now - old).count() > timeout) {
+        return true;
+    }
+
+    return false;
+}
+
+#ifdef __LINUX__
 std::string get_lib_path() {
   std::string dir = "/proc/self/map_files";
   DIR *dp;
@@ -191,18 +190,33 @@ std::string get_lib_path() {
 }
 #endif
 
-std::string get_full_program_path()
+std::string get_full_lib_path()
 {
     std::string program_path;
-#if defined(STEAM_WIN32)
+#if defined(__WINDOWS__)
     char   DllPath[MAX_PATH] = {0};
     GetModuleFileName((HINSTANCE)&__ImageBase, DllPath, _countof(DllPath));
     program_path = DllPath;
 #else
     program_path = get_lib_path();
 #endif
-    program_path = program_path.substr(0, program_path.rfind(PATH_SEPARATOR)).append(PATH_SEPARATOR);
     return program_path;
+}
+
+std::string get_full_program_path()
+{
+    std::string env_program_path = get_env_variable("SteamAppPath");
+    if (env_program_path.length()) {
+        if (env_program_path.back() != PATH_SEPARATOR[0]) {
+            env_program_path = env_program_path.append(PATH_SEPARATOR);
+        }
+
+        return env_program_path;
+    }
+
+    std::string program_path;
+    program_path = get_full_lib_path();
+    return program_path.substr(0, program_path.rfind(PATH_SEPARATOR)).append(PATH_SEPARATOR);
 }
 
 std::string get_current_path()
@@ -459,8 +473,46 @@ void Auth_Ticket_Manager::Callback(Common_Message *msg)
 }
 
 #ifdef EMU_EXPERIMENTAL_BUILD
-#ifdef STEAM_WIN32
-#include "../detours/detours.h"
+#ifdef __WINDOWS__
+
+struct ips_test {
+    uint32_t ip_from;
+    uint32_t ip_to;
+};
+
+static std::vector<struct ips_test> adapter_ips;
+
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+    adapter_ips.clear();
+    for (unsigned i = 0; i < num_ips; ++i) {
+        struct ips_test ip_a;
+        PRINT_DEBUG("from: %hhu.%hhu.%hhu.%hhu\n", ((unsigned char *)&from[i])[0], ((unsigned char *)&from[i])[1], ((unsigned char *)&from[i])[2], ((unsigned char *)&from[i])[3]);
+        PRINT_DEBUG("to: %hhu.%hhu.%hhu.%hhu\n", ((unsigned char *)&to[i])[0], ((unsigned char *)&to[i])[1], ((unsigned char *)&to[i])[2], ((unsigned char *)&to[i])[3]);
+        ip_a.ip_from = ntohl(from[i]);
+        ip_a.ip_to = ntohl(to[i]);
+        if (ip_a.ip_to < ip_a.ip_from) continue;
+        if ((ip_a.ip_to - ip_a.ip_from) > (1 << 25)) continue;
+        PRINT_DEBUG("added\n");
+        adapter_ips.push_back(ip_a);
+    }
+}
+
+static bool is_adapter_ip(unsigned char *ip)
+{
+    uint32_t ip_temp = 0;
+    memcpy(&ip_temp, ip, sizeof(ip_temp));
+    ip_temp = ntohl(ip_temp);
+
+    for (auto &i : adapter_ips) {
+        if (i.ip_from <= ip_temp && ip_temp <= i.ip_to) {
+            PRINT_DEBUG("ADAPTER IP %hhu.%hhu.%hhu.%hhu\n", ip[0], ip[1], ip[2], ip[3]);
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static bool is_lan_ip(const sockaddr *addr, int namelen)
 {
@@ -471,6 +523,7 @@ static bool is_lan_ip(const sockaddr *addr, int namelen)
         unsigned char ip[4];
         memcpy(ip, &addr_in->sin_addr, sizeof(ip));
         PRINT_DEBUG("CHECK LAN IP %hhu.%hhu.%hhu.%hhu:%u\n", ip[0], ip[1], ip[2], ip[3], ntohs(addr_in->sin_port));
+        if (is_adapter_ip(ip)) return true;
         if (ip[0] == 127) return true;
         if (ip[0] == 10) return true;
         if (ip[0] == 192 && ip[1] == 168) return true;
@@ -541,13 +594,6 @@ inline bool file_exists (const std::string& name) {
   return (stat (name.c_str(), &buffer) == 0); 
 }
 
-#ifdef DETOURS_64BIT
-#define DLL_NAME "steam_api64.dll"
-#else
-#define DLL_NAME "steam_api.dll"
-#endif
-
-
 HMODULE (WINAPI *Real_GetModuleHandleA)(LPCSTR lpModuleName) = GetModuleHandleA;
 HMODULE WINAPI Mine_GetModuleHandleA(LPCSTR lpModuleName)
 {
@@ -592,12 +638,6 @@ static void load_dll()
         PRINT_DEBUG("Loaded crack file\n");
     }
 }
-
-#ifdef DETOURS_64BIT
-#define LUMA_CEG_DLL_NAME "LumaCEG_Plugin_x64.dll"
-#else
-#define LUMA_CEG_DLL_NAME "LumaCEG_Plugin_x86.dll"
-#endif
 
 static void load_lumaCEG()
 {
@@ -645,7 +685,6 @@ bool crack_SteamAPI_Init()
 
     return false;
 }
-#include <winhttp.h>
 
 HINTERNET (WINAPI *Real_WinHttpConnect)(
   IN HINTERNET     hSession,
@@ -747,5 +786,15 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID ) {
 
     return TRUE;
 }
+#else
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+
+}
 #endif
+#else
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+
+}
 #endif

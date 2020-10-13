@@ -34,6 +34,7 @@
 #include "isteamclient016.h"
 #include "isteamclient017.h"
 #include "isteamclient018.h"
+#include "isteamclient019.h"
 #include "isteamuser.h"
 #include "isteamuser009.h"
 #include "isteamuser010.h"
@@ -46,6 +47,7 @@
 #include "isteamuser017.h"
 #include "isteamuser018.h"
 #include "isteamuser019.h"
+#include "isteamuser020.h"
 #include "isteamfriends.h"
 #include "isteamfriends004.h"
 #include "isteamfriends005.h"
@@ -68,11 +70,13 @@
 #include "isteamutils006.h"
 #include "isteamutils007.h"
 #include "isteamutils008.h"
+#include "isteamutils009.h"
 #include "isteammatchmaking.h"
 #include "isteammatchmaking006.h"
 #include "isteammatchmaking007.h"
 #include "isteammatchmaking008.h"
 #include "isteamuserstats.h"
+#include "isteamuserstats011.h"
 #include "isteamuserstats010.h"
 #include "isteamuserstats009.h"
 #include "isteamuserstats008.h"
@@ -82,17 +86,29 @@
 #include "isteamuserstats004.h"
 #include "isteamuserstats003.h"
 #include "isteamapps.h"
+#include "isteamapps007.h"
+#include "isteamapps006.h"
+#include "isteamapps005.h"
+#include "isteamapps004.h"
+#include "isteamapps003.h"
+#include "isteamapps002.h"
+#include "isteamapps001.h"
 #include "isteamnetworking.h"
+#include "isteamnetworking005.h"
 #include "isteamnetworking004.h"
 #include "isteamnetworking003.h"
 #include "isteamnetworking002.h"
 #include "isteamnetworking001.h"
-#include "isteamnetworkingsocketsserialized.h"
 #include "isteamnetworkingsockets.h"
+#include "isteamnetworkingsocketsserialized.h"
 #include "isteamnetworkingutils.h"
 #include "isteamnetworkingutils001.h"
+#include "isteamnetworkingutils002.h"
 #include "isteamnetworkingsockets001.h"
 #include "isteamnetworkingsockets002.h"
+#include "isteamnetworkingsockets003.h"
+#include "isteamnetworkingsockets006.h"
+#include "isteamnetworkingsockets008.h"
 #include "isteamremotestorage.h"
 #include "isteamremotestorage001.h"
 #include "isteamremotestorage002.h"
@@ -129,6 +145,7 @@
 #include "isteamugc009.h"
 #include "isteamugc010.h"
 #include "isteamugc012.h"
+#include "isteamugc013.h"
 #include "isteamapplist.h"
 #include "isteamhtmlsurface.h"
 #include "isteamhtmlsurface001.h"
@@ -145,6 +162,10 @@
 #include "isteamunifiedmessages.h"
 #include "isteaminput.h"
 #include "isteamremoteplay.h"
+#include "isteamnetworkingmessages.h"
+#include "isteamnetworkingsockets.h"
+#include "isteamnetworkingutils.h"
+#include "isteamtv.h"
 
 
 //----------------------------------------------------------------------------------------------------------------------------------------------------------//
@@ -209,6 +230,7 @@ S_API HSteamUser Steam_GetHSteamUserCurrent();
 S_API const char *SteamAPI_GetSteamInstallPath();
 
 // sets whether or not Steam_RunCallbacks() should do a try {} catch (...) {} around calls to issuing callbacks
+// This is ignored if you are using the manual callback dispatch method
 S_API void SteamAPI_SetTryCatchCallbacks( bool bTryCatchCallbacks );
 
 // backwards compat export, passes through to SteamAPI_ variants
@@ -232,16 +254,78 @@ S_API void S_CALLTYPE SteamAPI_UseBreakpadCrashHandler( char const *pchVersion, 
 S_API void S_CALLTYPE SteamAPI_SetBreakpadAppID( uint32 unAppID );
 #endif
 
+//----------------------------------------------------------------------------------------------------------------------------------------------------------//
+//
+// Manual callback loop
+//
+// An alternative method for dispatching callbacks.  Similar to a windows message loop.
+//
+// If you use the manual callback dispatch, you must NOT use:
+//
+// - SteamAPI_RunCallbacks or SteamGameServer_RunCallbacks
+// - STEAM_CALLBACK, CCallResult, CCallback, or CCallbackManual
+//
+// Here is the basic template for replacing SteamAPI_RunCallbacks() with manual dispatch
+/*
+
+	HSteamPipe hSteamPipe = SteamAPI_GetHSteamPipe(); // See also SteamGameServer_GetHSteamPipe()
+	SteamAPI_ManualDispatch_RunFrame( hSteamPipe )
+	CallbackMsg_t callback;
+	while ( SteamAPI_ManualDispatch_GetNextCallback( hSteamPipe, &callback ) )
+	{
+		// Check for dispatching API call results
+		if ( callback.m_iCallback == SteamAPICallCompleted_t::k_iCallback )
+		{
+			SteamAPICallCompleted_t *pCallCompleted = (SteamAPICallCompleted_t *)callback.
+			void *pTmpCallResult = malloc( pCallback->m_cubParam );
+			bool bFailed;
+			if ( SteamAPI_ManualDispatch_GetAPICallResult( hSteamPipe, pCallCompleted->m_hAsyncCall, pTmpCallResult, pCallback->m_cubParam, pCallback->m_iCallback, &bFailed ) )
+			{
+				// Dispatch the call result to the registered handler(s) for the
+				// call identified by pCallCompleted->m_hAsyncCall
+			}
+			free( pTmpCallResult );
+		}
+		else
+		{
+			// Look at callback.m_iCallback to see what kind of callback it is,
+			// and dispatch to appropriate handler(s)
+		}
+		SteamAPI_ManualDispatch_FreeLastCallback( hSteamPipe );
+	}
+
+*/
+//----------------------------------------------------------------------------------------------------------------------------------------------------------//
+
+/// Inform the API that you wish to use manual event dispatch.  This must be called after SteamAPI_Init, but before
+/// you use any of the other manual dispatch functions below.
+S_API void S_CALLTYPE SteamAPI_ManualDispatch_Init();
+
+/// Perform certain periodic actions that need to be performed.
+S_API void S_CALLTYPE SteamAPI_ManualDispatch_RunFrame( HSteamPipe hSteamPipe );
+
+/// Fetch the next pending callback on the given pipe, if any.  If a callback is available, true is returned
+/// and the structure is populated.  In this case, you MUST call SteamAPI_ManualDispatch_FreeLastCallback
+/// (after dispatching the callback) before calling SteamAPI_ManualDispatch_GetNextCallback again.
+S_API bool S_CALLTYPE SteamAPI_ManualDispatch_GetNextCallback( HSteamPipe hSteamPipe, CallbackMsg_t *pCallbackMsg );
+
+/// You must call this after dispatching the callback, if SteamAPI_ManualDispatch_GetNextCallback returns true.
+S_API void S_CALLTYPE SteamAPI_ManualDispatch_FreeLastCallback( HSteamPipe hSteamPipe );
+
+/// Return the call result for the specified call on the specified pipe.  You really should
+/// only call this in a handler for SteamAPICallCompleted_t callback.
+S_API bool S_CALLTYPE SteamAPI_ManualDispatch_GetAPICallResult( HSteamPipe hSteamPipe, SteamAPICall_t hSteamAPICall, void *pCallback, int cubCallback, int iCallbackExpected, bool *pbFailed );
 
 //----------------------------------------------------------------------------------------------------------------------------------------------------------//
 //
-//	CSteamAPIContext
+// CSteamAPIContext
+//
+// Deprecated!  This is not necessary any more.  Please use the global accessors directly
 //
 //----------------------------------------------------------------------------------------------------------------------------------------------------------//
 
 #ifndef STEAM_API_EXPORTS
 
-// Deprecated!  Use the global accessors directly
 inline bool CSteamAPIContext::Init()
 {
 	m_pSteamClient = ::SteamClient();
@@ -268,9 +352,11 @@ inline bool CSteamAPIContext::Init()
 	if ( !m_pSteamGameSearch )
 		return false;
 
+#if !defined( IOSALL) // Not yet supported on iOS.
 	m_pSteamMatchmakingServers = ::SteamMatchmakingServers();
 	if ( !m_pSteamMatchmakingServers )
 		return false;
+#endif
 
 	m_pSteamUserStats = ::SteamUserStats();
 	if ( !m_pSteamUserStats )
@@ -316,10 +402,10 @@ inline bool CSteamAPIContext::Init()
 	if ( !m_pSteamMusicRemote )
 		return false;
 
-#ifndef ANDROID // Not yet supported on Android
+#if !defined( ANDROID ) && !defined( IOSALL) // Not yet supported on Android or ios.
 	m_pSteamHTMLSurface = ::SteamHTMLSurface();
 	if ( !m_pSteamHTMLSurface )
-		return false;
+	return false;
 #endif
 
 	m_pSteamInventory = ::SteamInventory();

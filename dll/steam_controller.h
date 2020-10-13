@@ -16,8 +16,6 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "base.h"
-#include "../controller/gamepad.h"
-#include <cctype>
 
 struct Controller_Map {
     std::map<ControllerDigitalActionHandle_t, std::set<int>> active_digital;
@@ -129,7 +127,11 @@ public ISteamInput
     std::map<ControllerActionSetHandle_t, struct Controller_Map> controller_maps;
     std::map<ControllerHandle_t, struct Controller_Action> controllers;
 
+    std::map<EInputActionOrigin, std::string> steaminput_glyphs;
+    std::map<EControllerActionOrigin, std::string> steamcontroller_glyphs;
+
     bool disabled;
+    bool initialized;
 
     void set_handles(std::map<std::string, std::map<std::string, std::pair<std::set<std::string>, std::string>>> action_sets) {
         uint64 handle_num = 1;
@@ -211,6 +213,7 @@ Steam_Controller(class Settings *settings, class SteamCallResults *callback_resu
 
     set_handles(settings->controller_settings.action_sets);
     disabled = !action_handles.size();
+    initialized = false;
 }
 
 ~Steam_Controller()
@@ -242,6 +245,7 @@ bool Init()
         controllers.insert(std::pair<ControllerHandle_t, struct Controller_Action>(i, cont_action));
     }
 
+    initialized = true;
     return true;
 }
 
@@ -274,7 +278,7 @@ void SetOverrideMode( const char *pchMode )
 void RunFrame()
 {
     PRINT_DEBUG("Steam_Controller::RunFrame()\n");
-    if (disabled) {
+    if (disabled || !initialized) {
         return;
     }
 
@@ -658,8 +662,8 @@ int GetAnalogActionOrigins( InputHandle_t inputHandle, InputActionSetHandle_t ac
     if (a == map->second.active_analog.end()) return 0;
 
     int count = 0;
-    for (auto a: a->second.first) {
-        switch (a) {
+    for (auto b: a->second.first) {
+        switch (b) {
             case TRIGGER_LEFT:
                 originsOut[count] = k_EInputActionOrigin_XBox360_LeftTrigger_Pull;
                 break;
@@ -689,7 +693,7 @@ int GetAnalogActionOrigins( InputHandle_t inputHandle, InputActionSetHandle_t ac
     
 void StopAnalogActionMomentum( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t eAction )
 {
-    PRINT_DEBUG("Steam_Controller::StopAnalogActionMomentum\n");
+    PRINT_DEBUG("Steam_Controller::StopAnalogActionMomentum %llu %llu\n", controllerHandle, eAction);
 }
 
 
@@ -720,7 +724,12 @@ void TriggerVibration( ControllerHandle_t controllerHandle, unsigned short usLef
     auto controller = controllers.find(controllerHandle);
     if (controller == controllers.end()) return;
 
-    GamepadSetRumble((GAMEPAD_DEVICE)(controllerHandle - 1), ((double)usLeftSpeed) / 65535.0, ((double)usRightSpeed) / 65535.0);
+    unsigned int rumble_length_ms = 0;
+#if defined(__linux__)
+    //FIXME: shadow of the tomb raider on linux doesn't seem to turn off the rumble so I made it expire after 100ms. Need to check if this is how linux steam actually behaves.
+    rumble_length_ms = 100;
+#endif
+    GamepadSetRumble((GAMEPAD_DEVICE)(controllerHandle - 1), ((double)usLeftSpeed) / 65535.0, ((double)usRightSpeed) / 65535.0, rumble_length_ms);
 }
 
 
@@ -735,7 +744,10 @@ void SetLEDColor( ControllerHandle_t controllerHandle, uint8 nColorR, uint8 nCol
 int GetGamepadIndexForController( ControllerHandle_t ulControllerHandle )
 {
     PRINT_DEBUG("Steam_Controller::GetGamepadIndexForController\n");
-    return 0;
+    auto controller = controllers.find(ulControllerHandle);
+    if (controller == controllers.end()) return -1;
+
+    return ulControllerHandle - 1;
 }
 
 
@@ -743,7 +755,10 @@ int GetGamepadIndexForController( ControllerHandle_t ulControllerHandle )
 ControllerHandle_t GetControllerForGamepadIndex( int nIndex )
 {
     PRINT_DEBUG("Steam_Controller::GetControllerForGamepadIndex\n");
-    return 0;
+    ControllerHandle_t out = nIndex + 1;
+    auto controller = controllers.find(out);
+    if (controller == controllers.end()) return 0;
+    return out;
 }
 
 
@@ -788,14 +803,86 @@ const char *GetStringForActionOrigin( EInputActionOrigin eOrigin )
 // Get a local path to art for on-screen glyph for a particular origin 
 const char *GetGlyphForActionOrigin( EControllerActionOrigin eOrigin )
 {
-    PRINT_DEBUG("Steam_Controller::GetGlyphForActionOrigin\n");
-    return "";
+    PRINT_DEBUG("Steam_Controller::GetGlyphForActionOrigin %i\n", eOrigin);
+
+    if (steamcontroller_glyphs.empty()) {
+        std::string dir = settings->glyphs_directory;
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_A] = dir + "button_a.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_B] = dir + "button_b.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_X] = dir + "button_x.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_Y] = dir + "button_y.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftBumper] = dir + "shoulder_l.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightBumper] = dir + "shoulder_r.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_Start] = dir + "xbox_button_start.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_Back] = dir + "xbox_button_select.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftTrigger_Pull] = dir + "trigger_l_pull.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftTrigger_Click] = dir + "trigger_l_click.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightTrigger_Pull] = dir + "trigger_r_pull.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightTrigger_Click] = dir + "trigger_r_click.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_Move] = dir + "stick_l_move.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_Click] = dir + "stick_l_click.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_DPadNorth] = dir + "stick_dpad_n.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_DPadSouth] = dir + "stick_dpad_s.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_DPadWest] = dir + "stick_dpad_w.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_LeftStick_DPadEast] = dir + "stick_dpad_e.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_Move] = dir + "stick_r_move.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_Click] = dir + "stick_r_click.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_DPadNorth] = dir + "stick_dpad_n.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_DPadSouth] = dir + "stick_dpad_s.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_DPadWest] = dir + "stick_dpad_w.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_RightStick_DPadEast] = dir + "stick_dpad_e.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_DPad_North] = dir + "xbox_button_dpad_n.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_DPad_South] = dir + "xbox_button_dpad_s.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_DPad_West] = dir + "xbox_button_dpad_w.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_DPad_East] = dir + "xbox_button_dpad_e.png";
+        steamcontroller_glyphs[k_EControllerActionOrigin_XBox360_DPad_Move] = dir + "xbox_button_dpad_move.png";
+    }
+
+    auto glyph = steamcontroller_glyphs.find(eOrigin);
+    if (glyph == steamcontroller_glyphs.end()) return "";
+    return glyph->second.c_str();
 }
 
 const char *GetGlyphForActionOrigin( EInputActionOrigin eOrigin )
 {
-    PRINT_DEBUG("Steam_Controller::GetGlyphForActionOrigin steaminput\n");
-    return "";
+    PRINT_DEBUG("Steam_Controller::GetGlyphForActionOrigin steaminput %i\n", eOrigin);
+    if (steaminput_glyphs.empty()) {
+        std::string dir = settings->glyphs_directory;
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_A] = dir + "button_a.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_B] = dir + "button_b.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_X] = dir + "button_x.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_Y] = dir + "button_y.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftBumper] = dir + "shoulder_l.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightBumper] = dir + "shoulder_r.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_Start] = dir + "xbox_button_start.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_Back] = dir + "xbox_button_select.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftTrigger_Pull] = dir + "trigger_l_pull.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftTrigger_Click] = dir + "trigger_l_click.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightTrigger_Pull] = dir + "trigger_r_pull.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightTrigger_Click] = dir + "trigger_r_click.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_Move] = dir + "stick_l_move.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_Click] = dir + "stick_l_click.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_DPadNorth] = dir + "stick_dpad_n.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_DPadSouth] = dir + "stick_dpad_s.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_DPadWest] = dir + "stick_dpad_w.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_LeftStick_DPadEast] = dir + "stick_dpad_e.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_Move] = dir + "stick_r_move.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_Click] = dir + "stick_r_click.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_DPadNorth] = dir + "stick_dpad_n.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_DPadSouth] = dir + "stick_dpad_s.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_DPadWest] = dir + "stick_dpad_w.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_RightStick_DPadEast] = dir + "stick_dpad_e.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_DPad_North] = dir + "xbox_button_dpad_n.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_DPad_South] = dir + "xbox_button_dpad_s.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_DPad_West] = dir + "xbox_button_dpad_w.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_DPad_East] = dir + "xbox_button_dpad_e.png";
+        steaminput_glyphs[k_EInputActionOrigin_XBox360_DPad_Move] = dir + "xbox_button_dpad_move.png";
+        //steaminput_glyphs[] = dir + "";
+    }
+
+    auto glyph = steaminput_glyphs.find(eOrigin);
+    if (glyph == steaminput_glyphs.end()) return "";
+    return glyph->second.c_str();
 }
 
 // Returns the input type for a particular handle

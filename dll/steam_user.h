@@ -29,6 +29,7 @@ public ISteamUser016,
 public ISteamUser017,
 public ISteamUser018,
 public ISteamUser019,
+public ISteamUser020,
 public ISteamUser
 {
     Settings *settings;
@@ -82,7 +83,6 @@ bool BLoggedOn()
 CSteamID GetSteamID()
 {
     PRINT_DEBUG("Steam_User::GetSteamID\n");
-    std::lock_guard<std::recursive_mutex> lock(global_mutex);
     CSteamID id = settings->get_local_steam_id();
     
     return id;
@@ -110,6 +110,7 @@ CSteamID GetSteamID()
 int InitiateGameConnection( void *pAuthBlob, int cbMaxAuthBlob, CSteamID steamIDGameServer, uint32 unIPServer, uint16 usPortServer, bool bSecure )
 {
     PRINT_DEBUG("InitiateGameConnection %i %llu %u %u %u\n", cbMaxAuthBlob, steamIDGameServer.ConvertToUint64(), unIPServer, usPortServer, bSecure);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (cbMaxAuthBlob < INITIATE_GAME_CONNECTION_TICKET_SIZE) return 0;
     uint32 out_size = INITIATE_GAME_CONNECTION_TICKET_SIZE;
     ticket_manager->getTicketData(pAuthBlob, INITIATE_GAME_CONNECTION_TICKET_SIZE, &out_size);
@@ -374,8 +375,15 @@ SteamAPICall_t RequestEncryptedAppTicket( void *pDataToInclude, int cbDataToIncl
 bool GetEncryptedAppTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket )
 {
     PRINT_DEBUG("Steam_User::GetEncryptedAppTicket %i\n", cbMaxTicket);
-    if (!pcbTicket || !pTicket) return false;
+    if (!pcbTicket) return false;
     unsigned int ticket_size = encrypted_app_ticket.size() + 126;
+    if (!cbMaxTicket) {
+        *pcbTicket = ticket_size;
+        return true;
+    }
+
+    if (!pTicket) return false;
+
     //TODO figure out exact sizes?
     if (ticket_size < cbMaxTicket) cbMaxTicket = ticket_size;
     char ticket_base[] = {0x08, 0x01};
@@ -460,6 +468,15 @@ SteamAPICall_t GetDurationControl()
 {
     PRINT_DEBUG("GetDurationControl\n");
     return 0;
+}
+
+// Advise steam china duration control system about the online state of the game.
+// This will prevent offline gameplay time from counting against a user's
+// playtime limits.
+bool BSetDurationControlOnlineState( EDurationControlOnlineState eNewState )
+{
+    PRINT_DEBUG("BSetDurationControlOnlineState\n");
+    return false;
 }
 
 };

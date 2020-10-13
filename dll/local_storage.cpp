@@ -17,10 +17,15 @@
 
 #include "local_storage.h"
 
-#include <fstream>
-#include <algorithm>
-#include <iterator>
-#include <iomanip>
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#include "../stb/stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_STATIC
+#include "../stb/stb_image_write.h"
 
 struct File_Data {
     std::string name;
@@ -148,9 +153,18 @@ std::vector<std::string> Local_Storage::get_filenames_path(std::string path)
     return std::vector<std::string>();
 }
 
+std::vector<image_pixel_t> Local_Storage::load_image(std::string const& image_path)
+{
+    return std::vector<image_pixel_t>();
+}
+
+bool Local_Storage::save_screenshot(std::string const& image_path, uint8_t* img_ptr, int32_t width, int32_t height, int32_t channels)
+{
+    return false;
+}
+
 #else
-#if defined(WIN32) || defined(_WIN32)
-#include <windows.h>
+#if defined(__WINDOWS__)
 
 static BOOL DirectoryExists(LPCSTR szPath)
 {
@@ -175,11 +189,6 @@ static void create_directory(std::string strPath)
     if (DirectoryExists(strPath.c_str()) == FALSE)
         createDirectoryRecursively(strPath);
 }
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <string.h>
-
 
 static std::vector<struct File_Data> get_filenames(std::string strPath)
 {
@@ -250,14 +259,7 @@ static std::vector<struct File_Data> get_filenames_recursive(std::string base_pa
     return output;
 }
 
-#else 
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <string.h>
-#include <dirent.h>
-
-#define PATH_MAX_STRING_SIZE 512
+#else
 
 /* recursive mkdir */
 static int mkdir_p(const char *dir, const mode_t mode) {
@@ -396,11 +398,6 @@ std::string Local_Storage::get_game_settings_path()
 {
     return get_program_path().append(game_settings_folder).append(PATH_SEPARATOR);
 }
-
-#if defined(STEAM_WIN32)
-#include <shlobj.h>
-#include <sstream>
-#endif
 
 std::string Local_Storage::get_user_appdata_path()
 {
@@ -758,6 +755,34 @@ bool Local_Storage::write_json_file(std::string folder, std::string const&file, 
     PRINT_DEBUG("Couldn't open file \"%s\" to write json\n", full_path.c_str());
 
     return false;
+}
+
+std::vector<image_pixel_t> Local_Storage::load_image(std::string const& image_path)
+{
+    std::vector<image_pixel_t> res;
+    FILE* hFile = fopen(image_path.c_str(), "r");
+    if (hFile != nullptr)
+    {
+        int width, height;
+        image_pixel_t* img = (image_pixel_t*)stbi_load_from_file(hFile, &width, &height, nullptr, 4);
+        if (img != nullptr)
+        {
+            res.resize(width*height);
+            std::copy(img, img + width * height, res.begin());
+
+            stbi_image_free(img);
+        }
+        fclose(hFile);
+    }
+    return res;
+}
+
+bool Local_Storage::save_screenshot(std::string const& image_path, uint8_t* img_ptr, int32_t width, int32_t height, int32_t channels)
+{
+    std::string screenshot_path = std::move(save_directory + appid + screenshots_folder + PATH_SEPARATOR); 
+    create_directory(screenshot_path);
+    screenshot_path += image_path;
+    return stbi_write_png(screenshot_path.c_str(), width, height, channels, img_ptr, 0) == 1;
 }
 
 #endif

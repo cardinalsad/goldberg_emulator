@@ -16,7 +16,6 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "base.h" // For SteamItemDef_t
-#include "../json/json.hpp"
 
 struct Steam_Inventory_Requests {
     double timeout = 0.1;
@@ -441,6 +440,7 @@ bool DeserializeResult( SteamInventoryResult_t *pOutResultHandle, STEAM_BUFFER_C
 bool GenerateItems( SteamInventoryResult_t *pResultHandle, STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, STEAM_ARRAY_COUNT(unArrayLength) const uint32 *punArrayQuantity, uint32 unArrayLength )
 {
     PRINT_DEBUG("GenerateItems\n");
+    return false;
 }
 
 
@@ -452,6 +452,11 @@ STEAM_METHOD_DESC(GrantPromoItems() checks the list of promotional items for whi
 bool GrantPromoItems( SteamInventoryResult_t *pResultHandle )
 {
     PRINT_DEBUG("GrantPromoItems\n");
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
     return true;
 }
 
@@ -463,13 +468,25 @@ bool GrantPromoItems( SteamInventoryResult_t *pResultHandle )
 bool AddPromoItem( SteamInventoryResult_t *pResultHandle, SteamItemDef_t itemDef )
 {
     PRINT_DEBUG("AddPromoItem\n");
-    return false;
+    //TODO
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
+    return true;
 }
 
 bool AddPromoItems( SteamInventoryResult_t *pResultHandle, STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, uint32 unArrayLength )
 {
     PRINT_DEBUG("AddPromoItems\n");
-    return false;
+    //TODO
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
+    return true;
 }
 
 
@@ -480,6 +497,7 @@ STEAM_METHOD_DESC(ConsumeItem() removes items from the inventory permanently.)
 bool ConsumeItem( SteamInventoryResult_t *pResultHandle, SteamItemInstanceID_t itemConsume, uint32 unQuantity )
 {
     PRINT_DEBUG("ConsumeItem\n");
+    return false;
 }
 
 
@@ -496,6 +514,7 @@ bool ExchangeItems( SteamInventoryResult_t *pResultHandle,
                             STEAM_ARRAY_COUNT(unArrayDestroyLength) const SteamItemInstanceID_t *pArrayDestroy, STEAM_ARRAY_COUNT(unArrayDestroyLength) const uint32 *punArrayDestroyQuantity, uint32 unArrayDestroyLength )
 {
     PRINT_DEBUG("ExchangeItems\n");
+    return false;
 }
 
 
@@ -507,6 +526,7 @@ bool ExchangeItems( SteamInventoryResult_t *pResultHandle,
 bool TransferItemQuantity( SteamInventoryResult_t *pResultHandle, SteamItemInstanceID_t itemIdSource, uint32 unQuantity, SteamItemInstanceID_t itemIdDest )
 {
     PRINT_DEBUG("TransferItemQuantity\n");
+    return false;
 }
 
 
@@ -534,8 +554,13 @@ void SendItemDropHeartbeat()
 STEAM_METHOD_DESC(Playtime credit must be consumed and turned into item drops by your game.)
 bool TriggerItemDrop( SteamInventoryResult_t *pResultHandle, SteamItemDef_t dropListDefinition )
 {
-    PRINT_DEBUG("TriggerItemDrop\n");
+    PRINT_DEBUG("TriggerItemDrop %p %i\n", pResultHandle, dropListDefinition);
     //TODO: if gameserver return false
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
     return true;
 }
 
@@ -591,7 +616,7 @@ bool GetItemDefinitionIDs(
             STEAM_OUT_ARRAY_COUNT(punItemDefIDsArraySize,List of item definition IDs) SteamItemDef_t *pItemDefIDs,
             STEAM_DESC(Size of array is passed in and actual size used is returned in this param) uint32 *punItemDefIDsArraySize )
 {
-    PRINT_DEBUG("GetItemDefinitionIDs\n");
+    PRINT_DEBUG("GetItemDefinitionIDs %p\n", pItemDefIDs);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (!punItemDefIDsArraySize)
         return false;
@@ -725,6 +750,7 @@ STEAM_CALL_RESULT( SteamInventoryEligiblePromoItemDefIDs_t )
 SteamAPICall_t RequestEligiblePromoItemDefinitionsIDs( CSteamID steamID )
 {
     PRINT_DEBUG("RequestEligiblePromoItemDefinitionsIDs\n");
+    return 0;
 }
 
 
@@ -737,6 +763,7 @@ bool GetEligiblePromoItemDefinitionIDs(
     STEAM_DESC(Size of array is passed in and actual size used is returned in this param) uint32 *punItemDefIDsArraySize )
 {
     PRINT_DEBUG("GetEligiblePromoItemDefinitionIDs\n");
+    return false;
 }
 
 
@@ -749,6 +776,7 @@ STEAM_CALL_RESULT( SteamInventoryStartPurchaseResult_t )
 SteamAPICall_t StartPurchase( STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, STEAM_ARRAY_COUNT(unArrayLength) const uint32 *punArrayQuantity, uint32 unArrayLength )
 {
     PRINT_DEBUG("StartPurchase\n");
+    return 0;
 }
 
 
@@ -793,6 +821,7 @@ bool GetItemsWithPrices( STEAM_ARRAY_COUNT(unArrayLength) STEAM_OUT_ARRAY_COUNT(
 bool GetItemPrice( SteamItemDef_t iDefinition, uint64 *pCurrentPrice, uint64 *pBasePrice )
 {
     PRINT_DEBUG("GetItemPrice\n");
+    return false;
 }
 
 // Retrieves the price for the item definition id
@@ -808,39 +837,52 @@ bool GetItemPrice( SteamItemDef_t iDefinition, uint64 *pPrice )
 SteamInventoryUpdateHandle_t StartUpdateProperties()
 {
     PRINT_DEBUG("StartUpdateProperties\n");
+    return 0;
 }
 
 // Remove the property on the item
 bool RemoveProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName )
 {
     PRINT_DEBUG("RemoveProperty\n");
+    return false;
 }
 
 // Accessor methods to set properties on items
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, bool bValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, int64 nValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 // Submit the update request by handle
 bool SubmitUpdateProperties( SteamInventoryUpdateHandle_t handle, SteamInventoryResult_t * pResultHandle )
 {
     PRINT_DEBUG("SubmitUpdateProperties\n");
+    return false;
+}
+
+bool InspectItem( SteamInventoryResult_t *pResultHandle, const char *pchItemToken )
+{
+    PRINT_DEBUG("InspectItem\n");
+    return false;
 }
 
 void RunCallbacks()

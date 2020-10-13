@@ -18,25 +18,11 @@
 #include "network.h"
 #include "dll.h"
 
-#if defined(STEAM_WIN32)
-
-#define MSG_NOSIGNAL 0
-
-#else
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <linux/netdevice.h>
-#include <netdb.h>
-#endif
-
 #define MAX_BROADCASTS 16
 static int number_broadcasts = -1;
 static IP_PORT broadcasts[MAX_BROADCASTS];
+static uint32_t lower_range_ips[MAX_BROADCASTS];
+static uint32_t upper_range_ips[MAX_BROADCASTS];
 
 #define BROADCAST_INTERVAL 5.0
 #define HEARTBEAT_TIMEOUT 20.0
@@ -44,7 +30,44 @@ static IP_PORT broadcasts[MAX_BROADCASTS];
 
 #if defined(STEAM_WIN32)
 
-#include <iphlpapi.h>
+//windows xp support
+static int
+inet_pton4(const char *src, uint32_t *dst)
+{
+	static const char digits[] = "0123456789";
+	int saw_digit, octets, ch;
+	u_char tmp[sizeof(uint32_t)], *tp;
+
+	saw_digit = 0;
+	octets = 0;
+	*(tp = tmp) = 0;
+	while ((ch = *src++) != '\0') {
+		const char *pch;
+
+		if ((pch = strchr(digits, ch)) != NULL) {
+			size_t nx = *tp * 10 + (pch - digits);
+
+			if (nx > 255)
+				return (0);
+			*tp = (u_char) nx;
+			if (! saw_digit) {
+				if (++octets > 4)
+					return (0);
+				saw_digit = 1;
+			}
+		} else if (ch == '.' && saw_digit) {
+			if (octets == 4)
+				return (0);
+			*++tp = 0;
+			saw_digit = 0;
+		} else
+			return (0);
+	}
+	if (octets < 4)
+		return (0);
+	memcpy(dst, tmp, sizeof(uint32_t));
+	return (1);
+}
 
 static void get_broadcast_info(uint16 port)
 {
@@ -72,16 +95,16 @@ static void get_broadcast_info(uint16 port)
         IP_ADAPTER_INFO *pAdapter = pAdapterInfo;
 
         while (pAdapter) {
-            unsigned long iface_ip = 0, subnet_mask = 0;
+            uint32_t iface_ip = 0, subnet_mask = 0;
 
-            
-            if (inet_pton(AF_INET, pAdapter->IpAddressList.IpMask.String, &subnet_mask) == 1
-                    && inet_pton(AF_INET, pAdapter->IpAddressList.IpAddress.String, &iface_ip) == 1) {
+            if (inet_pton4(pAdapter->IpAddressList.IpMask.String, &subnet_mask) == 1
+                    && inet_pton4(pAdapter->IpAddressList.IpAddress.String, &iface_ip) == 1) {
                     IP_PORT *ip_port = &broadcasts[number_broadcasts];
-                    //ip_port->ip.family = AF_INET;
                     uint32 broadcast_ip = iface_ip | ~subnet_mask;
                     ip_port->ip = broadcast_ip;
                     ip_port->port = port;
+                    lower_range_ips[number_broadcasts] = iface_ip & subnet_mask;
+                    upper_range_ips[number_broadcasts] = broadcast_ip;
                     number_broadcasts++;
 
                     if (number_broadcasts >= MAX_BROADCASTS) {
@@ -223,6 +246,11 @@ static void run_at_startup()
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR)
         return;
+
+    for (int i = 0; i < 10; ++i) {
+        //hack: the game Full Mojo Rampage calls WSACleanup on startup so we call WSAStartup a few times so it doesn't get deallocated.
+        WSAStartup(MAKEWORD(2, 2), &wsaData);
+    }
 #else
 
 #endif
@@ -288,6 +316,7 @@ static bool send_broadcasts(sock_t sock, uint16 port, char *data, unsigned long 
     if (number_broadcasts < 0 || check_timedout(last_get_broadcast_info, 60.0)) {
         PRINT_DEBUG("get_broadcast_info\n");
         get_broadcast_info(port);
+        set_adapter_ips(lower_range_ips, upper_range_ips, number_broadcasts);
         last_get_broadcast_info = std::chrono::high_resolution_clock::now();
     }
 
@@ -444,18 +473,6 @@ static bool recv_tcp(struct TCP_Socket &socket)
     return false;
 }
 
-bool check_timedout(std::chrono::high_resolution_clock::time_point old, double timeout)
-{
-    if (timeout == 0.0) return true;
-
-    std::chrono::high_resolution_clock::time_point now = std::chrono::high_resolution_clock::now();
-    if (std::chrono::duration_cast<std::chrono::duration<double>>(now - old).count() > timeout) {
-        return true;
-    }
-
-    return false;
-}
-
 static void socket_timeouts(struct TCP_Socket &socket, double extra_time)
 {
     if (check_timedout(socket.last_heartbeat_sent, HEARTBEAT_TIMEOUT / 2.0)) {
@@ -533,6 +550,11 @@ void Networking::do_callbacks_message(Common_Message *msg)
     if (msg->has_networking_sockets()) {
         PRINT_DEBUG("has_networking_sockets\n");
         run_callbacks(CALLBACK_ID_NETWORKING_SOCKETS, msg);
+    }
+
+    if (msg->has_steam_messages()) {
+        PRINT_DEBUG("has_steam_messages\n");
+        run_callbacks(CALLBACK_ID_STEAM_MESSAGES, msg);
     }
 }
 
@@ -1110,6 +1132,16 @@ bool Networking::sendToIPPort(Common_Message *msg, uint32 ip, uint16 port, bool 
     }
 
     return true;
+}
+
+uint32 Networking::getIP(CSteamID id)
+{
+    Connection *conn = find_connection(id, this->appid);
+    if (conn) {
+        return ntohl(conn->tcp_ip_port.ip);
+    }
+
+    return 0;
 }
 
 bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)

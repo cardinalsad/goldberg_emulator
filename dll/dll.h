@@ -19,10 +19,16 @@
 
 #ifdef STEAMCLIENT_DLL
 #define STEAMAPI_API static
-#define STEAMCLIENT_API S_API
+#define STEAMCLIENT_API S_API_EXPORT
 #else
-#define STEAMAPI_API S_API
+#define STEAMAPI_API S_API_EXPORT
 #define STEAMCLIENT_API static
 #endif
 
 Steam_Client *get_steam_client();
+bool steamclient_has_ipv6_functions();
+
+HSteamUser flat_hsteamuser();
+HSteamPipe flat_hsteampipe();
+HSteamUser flat_gs_hsteamuser();
+HSteamPipe flat_gs_hsteampipe();

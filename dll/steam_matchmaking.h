@@ -91,7 +91,23 @@ public ISteamMatchmaking
     std::vector<struct Chat_Entry> chat_entries;
     std::vector<struct Data_Requested> data_requested;
 
-    std::map<uint64, std::map<std::string, std::string>> self_lobby_member_data;
+    std::map<uint64, ::google::protobuf::Map<std::string, std::string>> self_lobby_member_data;
+google::protobuf::Map<std::string,std::string>::const_iterator caseinsensitive_find(const ::google::protobuf::Map< ::std::string, ::std::string >& map, std::string key)
+{
+    auto x = map.begin();
+    while (x != map.end()) {
+        if (key.size() == x->first.size() && std::equal(x->first.begin(), x->first.end(), key.begin(),
+                      [](char a, char b) {
+                          return tolower(a) == tolower(b);
+                      })) {
+                          break;
+                      }
+        ++x;
+    }
+
+    return x;
+}
+
 Lobby *get_lobby(CSteamID id)
 {
     auto lobby = std::find_if(lobbies.begin(), lobbies.end(), [&id](Lobby const& item) { return item.room_id() == id.ConvertToUint64(); });
@@ -116,7 +132,7 @@ void send_lobby_data()
     }
 }
 
-void trigger_lobby_dataupdate(CSteamID lobby, CSteamID member, bool success, double cb_timeout=0.0)
+void trigger_lobby_dataupdate(CSteamID lobby, CSteamID member, bool success, double cb_timeout=0.005, bool send_changed_lobby=true)
 {
     PRINT_DEBUG("Lobby dataupdate %llu %llu\n", lobby.ConvertToUint64(), member.ConvertToUint64());
     LobbyDataUpdate_t data;
@@ -135,10 +151,12 @@ void trigger_lobby_dataupdate(CSteamID lobby, CSteamID member, bool success, dou
 
     Lobby *l = get_lobby(lobby);
     if (l && l->owner() == settings->get_local_steam_id().ConvertToUint64()) {
-        Common_Message msg = Common_Message();
-        msg.set_source_id(settings->get_local_steam_id().ConvertToUint64());
-        msg.set_allocated_lobby(new Lobby(*l));
-        network->sendToAllIndividuals(&msg, true);
+        if (send_changed_lobby) {
+            Common_Message msg = Common_Message();
+            msg.set_source_id(settings->get_local_steam_id().ConvertToUint64());
+            msg.set_allocated_lobby(new Lobby(*l));
+            network->sendToAllIndividuals(&msg, true);
+        }
     }
 }
 
@@ -382,8 +400,7 @@ bool RemoveFavoriteGame( AppId_t nAppID, uint32 nIP, uint16 nConnPort, uint16 nQ
     }
 */
 // 
-#define LOBBY_SEARCH_TIMEOUT 3.0 //defined by steam as being 20 seconds max and 3 seconds typically (Should be no less than 3 because or else SGZH doesn't work). 
-                                 //Sanctum 2 needs this to be 2 seconds for the game to appear in the list though.
+#define LOBBY_SEARCH_TIMEOUT 0.2 //Tested on real steam
 STEAM_CALL_RESULT( LobbyMatchList_t )
 SteamAPICall_t RequestLobbyList()
 {
@@ -458,7 +475,7 @@ void AddRequestLobbyListFilterSlotsAvailable( int nSlotsAvailable )
 // sets the distance for which we should search for lobbies (based on users IP address to location map on the Steam backed)
 void AddRequestLobbyListDistanceFilter( ELobbyDistanceFilter eLobbyDistanceFilter )
 {
-    PRINT_DEBUG("AddRequestLobbyListDistanceFilter\n");
+    PRINT_DEBUG("AddRequestLobbyListDistanceFilter %i\n", eLobbyDistanceFilter);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
     
@@ -506,12 +523,13 @@ CSteamID GetLobbyByIndex( int iLobby )
     return id;
 }
 
-static void enter_lobby(Lobby *lobby, CSteamID id)
+static bool enter_lobby(Lobby *lobby, CSteamID id)
 {
-    if (get_lobby_member(lobby, id)) return;
+    if (get_lobby_member(lobby, id)) return false;
 
     Lobby_Member *member = lobby->add_members();
     member->set_id(id.ConvertToUint64());
+    return true;
 }
 
 static bool leave_lobby(Lobby *lobby, CSteamID id)
@@ -603,35 +621,12 @@ SteamAPICall_t JoinLobby( CSteamID steamIDLobby )
     PRINT_DEBUG("JoinLobby %llu\n", steamIDLobby.ConvertToUint64());
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
+    auto pj = std::find_if(pending_joins.begin(), pending_joins.end(), [&steamIDLobby](Pending_Joins const& item) {return item.lobby_id == steamIDLobby;});
+    if (pj != pending_joins.end()) return pj->api_id;
+
     Pending_Joins pending_join;
     pending_join.api_id = callback_results->reserveCallResult();
     pending_join.lobby_id = steamIDLobby;
-    Lobby *lobby = get_lobby(steamIDLobby);
-    bool success = true;
-    if (lobby && lobby->deleted()) {
-        LobbyEnter_t data;
-        data.m_ulSteamIDLobby = lobby->room_id();
-        data.m_rgfChatPermissions = 0; //Unused - Always 0
-        data.m_bLocked = false;
-        data.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseError;
-        auto api = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
-        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
-        
-        return api;
-    }
-
-    if (get_lobby_member(lobby, settings->get_local_steam_id())) {
-        LobbyEnter_t data;
-        data.m_ulSteamIDLobby = lobby->room_id();
-        data.m_rgfChatPermissions = 0; //Unused - Always 0
-        data.m_bLocked = false;
-        data.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseSuccess;
-        auto api = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
-        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
-
-        return api;
-    }
-
     pending_join.joined = std::chrono::high_resolution_clock::now();
     pending_joins.push_back(pending_join);
 
@@ -653,6 +648,7 @@ void LeaveLobby( CSteamID steamIDLobby )
     if (lobbies.end() != lobby) {
         if (!lobby->deleted()) {
             on_self_enter_leave_lobby((uint64)lobby->room_id(), lobby->type(), true);
+            self_lobby_member_data.erase(lobby->room_id());
             if (lobby->owner() != settings->get_local_steam_id().ConvertToUint64()) {
                 PRINT_DEBUG("LeaveLobby not owner\n");
                 leave_lobby(&(*lobby), settings->get_local_steam_id());
@@ -746,12 +742,13 @@ CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember )
 const char *GetLobbyData( CSteamID steamIDLobby, const char *pchKey )
 {
     PRINT_DEBUG("GetLobbyData %llu %s\n", steamIDLobby.ConvertToUint64(), pchKey);
+    if (!pchKey) return "";
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     Lobby *lobby = get_lobby(steamIDLobby);
     const char *ret = "";
     if (lobby) {
-        auto result = lobby->values().find(pchKey);
-        if (result != lobby->values().end()) ret = lobby->values().find(pchKey)->second.c_str();
+        auto result = caseinsensitive_find(lobby->values(), pchKey);
+        if (result != lobby->values().end()) ret = result->second.c_str();
     }
 
     PRINT_DEBUG("returned %s\n", ret);
@@ -776,12 +773,16 @@ bool SetLobbyData( CSteamID steamIDLobby, const char *pchKey, const char *pchVal
         return false;
     }
 
-    auto result = lobby->values().find(pchKey);
-    if (result == lobby->values().end() || result->second != std::string(pchValue)) {
+    auto result = caseinsensitive_find(lobby->values(), pchKey);
+    bool changed = true;
+    if (result == lobby->values().end()) {
         (*lobby->mutable_values())[pchKey] = pchValue;
-        trigger_lobby_dataupdate(steamIDLobby, steamIDLobby, true);
+    } else {
+        if (result->second == std::string(pchValue)) changed = false;
+        (*lobby->mutable_values())[result->first] = pchValue;
     }
 
+    trigger_lobby_dataupdate(steamIDLobby, steamIDLobby, true, 0.0, changed);
     return true;
 }
 
@@ -847,6 +848,7 @@ bool DeleteLobbyData( CSteamID steamIDLobby, const char *pchKey )
 const char *GetLobbyMemberData( CSteamID steamIDLobby, CSteamID steamIDUser, const char *pchKey )
 {
     PRINT_DEBUG("GetLobbyMemberData %s %llu %llu\n", pchKey, steamIDLobby.ConvertToUint64(), steamIDUser.ConvertToUint64());
+    if (!pchKey) return "";
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     struct Lobby_Member *member = get_lobby_member(get_lobby(steamIDLobby), steamIDUser);
     const char *ret = "";
@@ -854,13 +856,13 @@ const char *GetLobbyMemberData( CSteamID steamIDLobby, CSteamID steamIDUser, con
         if (steamIDUser == settings->get_local_steam_id()) {
             auto result = self_lobby_member_data.find(steamIDLobby.ConvertToUint64());
             if (result != self_lobby_member_data.end()) {
-                auto value = result->second.find(std::string(pchKey));
+                auto value = caseinsensitive_find(result->second, std::string(pchKey));
                 if (value != result->second.end()) {
                     ret = value->second.c_str();
                 }
             }
         } else {
-            auto result = member->values().find(std::string(pchKey));
+            auto result = caseinsensitive_find(member->values(), std::string(pchKey));
             if (result == member->values().end()) return "";
             ret = result->second.c_str();
         }
@@ -885,7 +887,12 @@ void SetLobbyMemberData( CSteamID steamIDLobby, const char *pchKey, const char *
     Lobby_Member *member = get_lobby_member(lobby, settings->get_local_steam_id());
     if (member) {
         if (lobby->owner() == settings->get_local_steam_id().ConvertToUint64()) {
-            (*member->mutable_values())[pchKey] = pchValue;
+            auto result = caseinsensitive_find(member->values(), std::string(pchKey));
+            if (result == member->values().end()) {
+                (*member->mutable_values())[pchKey] = pchValue;
+            } else {
+                (*member->mutable_values())[result->first] = pchValue;
+            }
             trigger_lobby_dataupdate(steamIDLobby, (uint64)member->id(), true);
         } else {
             Lobby_Messages *message = new Lobby_Messages();
@@ -894,10 +901,20 @@ void SetLobbyMemberData( CSteamID steamIDLobby, const char *pchKey, const char *
             send_owner_packet(steamIDLobby, message);
         }
 
-        self_lobby_member_data[steamIDLobby.ConvertToUint64()][pchKey] = pchValue;
+        {
+            auto result = self_lobby_member_data.find(steamIDLobby.ConvertToUint64());
+            if (result != self_lobby_member_data.end()) {
+                auto value = caseinsensitive_find(result->second, std::string(pchKey));
+                if (value != result->second.end()) {
+                    self_lobby_member_data[steamIDLobby.ConvertToUint64()][value->first] = pchValue;
+                } else {
+                    self_lobby_member_data[steamIDLobby.ConvertToUint64()][pchKey] = pchValue;
+                }
+            } else {
+                self_lobby_member_data[steamIDLobby.ConvertToUint64()][pchKey] = pchValue;
+            }
+        }
     }
-
-    
 }
 
 
@@ -1086,7 +1103,7 @@ bool SetLobbyJoinable( CSteamID steamIDLobby, bool bLobbyJoinable )
 
 
 // returns the current lobby owner
-// you must be a member of the lobby to access this
+// you must be a member of the lobby to access this (Mr_Goldberg note: This is a lie)
 // there always one lobby owner - if the current owner leaves, another user will become the owner
 // it is possible (bur rare) to join a lobby just as the owner is leaving, thus entering a lobby with self as the owner
 CSteamID GetLobbyOwner( CSteamID steamIDLobby )
@@ -1094,10 +1111,10 @@ CSteamID GetLobbyOwner( CSteamID steamIDLobby )
     PRINT_DEBUG("GetLobbyOwner %llu\n", steamIDLobby.ConvertToUint64());
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     Lobby *lobby = get_lobby(steamIDLobby);
-    CSteamID id = k_steamIDNil;
-    if (lobby) id = (uint64)lobby->owner();
-    
-    return id;
+    if (!lobby || lobby->deleted()) return k_steamIDNil;
+
+    //TODO: might be better to require the lobby info to be at least requested first.
+    return (uint64)lobby->owner();
 }
 
 
@@ -1153,7 +1170,7 @@ void RunCallbacks()
             PRINT_DEBUG("use lobby: %u, filters: %zu, joinable: %u, type: %u, deleted: %u\n", use, filter_values_copy.size(), l.joinable(), l.type(), l.deleted());
             for (auto & f : filter_values_copy) {
                 PRINT_DEBUG("%s:%s/%i %u %i\n", f.key.c_str(), f.value_string.c_str(), f.value_int, f.is_int, f.eComparisonType);
-                auto value = l.values().find(f.key);
+                auto value = caseinsensitive_find(l.values(), f.key);
                 if (value != l.values().end()) {
                     //TODO: eComparisonType
                     if (!f.is_int) {
@@ -1169,7 +1186,12 @@ void RunCallbacks()
                         }
                     } else {
                         try {
-                            int compare_to = std::stoi(value->second, 0, 0);
+                            PRINT_DEBUG("%s\n", value->second.c_str());
+                            int compare_to = 0;
+                            //TODO: check if this is how real steam behaves
+                            if (value->second.size()) {
+                                compare_to = std::stoll(value->second, 0, 0);
+                            }
                             PRINT_DEBUG("Compare Values %i %i\n", compare_to, f.value_int);
                             if (f.eComparisonType == k_ELobbyComparisonEqual) {
                                 if (compare_to == f.value_int) {
@@ -1227,13 +1249,36 @@ void RunCallbacks()
             g->message_sent = send_owner_packet(g->lobby_id, message);
         }
 
+        Lobby *lobby = get_lobby(g->lobby_id);
+        if (lobby && lobby->deleted()) {
+            LobbyEnter_t data;
+            data.m_ulSteamIDLobby = lobby->room_id();
+            data.m_rgfChatPermissions = 0; //Unused - Always 0
+            data.m_bLocked = false;
+            data.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseDoesntExist;
+            callback_results->addCallResult(g->api_id, data.k_iCallback, &data, sizeof(data));
+            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+            g = pending_joins.erase(g);
+        } else
+
+        if (get_lobby_member(lobby, settings->get_local_steam_id())) {
+            LobbyEnter_t data;
+            data.m_ulSteamIDLobby = lobby->room_id();
+            data.m_rgfChatPermissions = 0; //Unused - Always 0
+            data.m_bLocked = false;
+            data.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseSuccess;
+            callback_results->addCallResult(g->api_id, data.k_iCallback, &data, sizeof(data));
+            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+            g = pending_joins.erase(g);
+            trigger_lobby_dataupdate((uint64)lobby->room_id(), (uint64)lobby->room_id(), true);
+        } else
+
         if (check_timedout(g->joined, PENDING_JOIN_TIMEOUT)) {
-            bool success = false;
             LobbyEnter_t data;
             data.m_ulSteamIDLobby = g->lobby_id.ConvertToUint64();
             data.m_rgfChatPermissions = 0; //Unused - Always 0
             data.m_bLocked = false;
-            data.m_EChatRoomEnterResponse = success ? k_EChatRoomEnterResponseSuccess : k_EChatRoomEnterResponseError;
+            data.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseDoesntExist;
             callback_results->addCallResult(g->api_id, data.k_iCallback, &data, sizeof(data));
             callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
             g = pending_joins.erase(g);
@@ -1271,7 +1316,7 @@ void Callback(Common_Message *msg)
         if (msg->lobby().owner() != settings->get_local_steam_id().ConvertToUint64() && msg->lobby().appid() == settings->get_local_game_id().AppID()) {
             Lobby *lobby = get_lobby((uint64)msg->lobby().room_id());
             if (!lobby) {
-                unsigned int old_size = lobbies.size();
+                size_t old_size = lobbies.size();
                 lobbies.resize(old_size + 1);
                 lobbies[old_size].set_room_id(msg->lobby().room_id());
                 lobby = &(lobbies[old_size]);
@@ -1301,20 +1346,26 @@ void Callback(Common_Message *msg)
                         if (!member) {
                             if (m.id() == settings->get_local_steam_id().ConvertToUint64()) {
                                 CSteamID id((uint64)lobby->room_id());
-                                auto pd = std::find_if(pending_joins.begin(), pending_joins.end(), [&id](Pending_Joins const& item) { return item.lobby_id == id; });
-                                if (pd != pending_joins.end()) {
-                                    bool success = true;
-                                    LobbyEnter_t data;
-                                    data.m_ulSteamIDLobby = lobby->room_id();
-                                    data.m_rgfChatPermissions = 0; //Unused - Always 0
-                                    data.m_bLocked = false;
-                                    data.m_EChatRoomEnterResponse = success ? k_EChatRoomEnterResponseSuccess : k_EChatRoomEnterResponseError;
-                                    callback_results->addCallResult(pd->api_id, data.k_iCallback, &data, sizeof(data));
-                                    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
-                                    pending_joins.erase(pd);
+                                auto pd = pending_joins.begin();
+                                while (pd != pending_joins.end()) {
+                                    if (pd->lobby_id == id) {
+                                        bool success = true;
+                                        LobbyEnter_t data;
+                                        data.m_ulSteamIDLobby = lobby->room_id();
+                                        data.m_rgfChatPermissions = 0; //Unused - Always 0
+                                        data.m_bLocked = false;
+                                        data.m_EChatRoomEnterResponse = success ? k_EChatRoomEnterResponseSuccess : k_EChatRoomEnterResponseError;
+                                        callback_results->addCallResult(pd->api_id, data.k_iCallback, &data, sizeof(data));
+                                        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+                                        pd = pending_joins.erase(pd);
+                                        joined = true;
+                                    } else {
+                                        ++pd;
+                                    }
+                                }
+                                if (joined) {
                                     on_self_enter_leave_lobby((uint64)lobby->room_id(), lobby->type(), false);
                                     trigger_lobby_dataupdate((uint64)lobby->room_id(), (uint64)lobby->room_id(), true);
-                                    joined = true;
                                 }
                             } else {
                                 if (we_are_in_lobby) trigger_lobby_member_join_leave((uint64)lobby->room_id(), (uint64)m.id(), false, true);
@@ -1355,8 +1406,9 @@ void Callback(Common_Message *msg)
             if (lobby->owner() == settings->get_local_steam_id().ConvertToUint64()) {
                 if (msg->lobby_messages().type() == Lobby_Messages::JOIN) {
                     PRINT_DEBUG("LOBBY MESSAGE: JOIN\n");
-                    enter_lobby(lobby, (uint64)msg->source_id());
-                    trigger_lobby_member_join_leave((uint64)lobby->room_id(), (uint64)msg->source_id(), false, true);
+                    if (enter_lobby(lobby, (uint64)msg->source_id())) {
+                        trigger_lobby_member_join_leave((uint64)lobby->room_id(), (uint64)msg->source_id(), false, true, 0.01);
+                    }
                 }
 
                 if (msg->lobby_messages().type() == Lobby_Messages::MEMBER_DATA) {
@@ -1365,7 +1417,12 @@ void Callback(Common_Message *msg)
                     if (member) {
                         for (auto const &p : msg->lobby_messages().map()) {
                             PRINT_DEBUG("member data %s:%s\n", p.first.c_str(), p.second.c_str());
-                            (*member->mutable_values())[p.first] = p.second;
+                            auto result = caseinsensitive_find(member->values(), p.first);
+                            if (result == member->values().end()) {
+                                (*member->mutable_values())[p.first] = p.second;
+                            } else {
+                                (*member->mutable_values())[result->first] = p.second;
+                            }
                         }
 
                         trigger_lobby_dataupdate((uint64)lobby->room_id(), (uint64)member->id(), true);

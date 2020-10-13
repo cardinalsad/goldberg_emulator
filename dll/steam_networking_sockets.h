@@ -44,11 +44,17 @@ struct Connect_Socket {
     int64 user_data;
 
     std::queue<std::string> data;
+    HSteamNetPollGroup poll_group;
+
+    unsigned long long packet_receive_counter;
 };
 
 class Steam_Networking_Sockets :
 public ISteamNetworkingSockets001,
 public ISteamNetworkingSockets002,
+public ISteamNetworkingSockets003,
+public ISteamNetworkingSockets006,
+public ISteamNetworkingSockets008,
 public ISteamNetworkingSockets
 {
     class Settings *settings;
@@ -59,6 +65,9 @@ public ISteamNetworkingSockets
 
     std::vector<struct Listen_Socket> listen_sockets;
     std::map<HSteamNetConnection, struct Connect_Socket> connect_sockets;
+    std::map<HSteamNetPollGroup, std::list<HSteamNetConnection>> poll_groups;
+    std::chrono::steady_clock::time_point created;
+
 public:
 static void steam_callback(void *object, Common_Message *msg)
 {
@@ -87,6 +96,8 @@ Steam_Networking_Sockets(class Settings *settings, class Networking *network, cl
 
     this->callback_results = callback_results;
     this->callbacks = callbacks;
+
+    this->created = std::chrono::steady_clock::now();
 }
 
 ~Steam_Networking_Sockets()
@@ -151,6 +162,7 @@ HSteamNetConnection new_connect_socket(SteamNetworkingIdentity remote_identity, 
     socket.remote_id = remote_id;
     socket.status = status;
     socket.user_data = -1;
+    socket.poll_group = k_HSteamNetPollGroup_Invalid;
 
     static HSteamNetConnection socket_id;
     ++socket_id;
@@ -239,7 +251,14 @@ HSteamListenSocket CreateListenSocket( int nSteamConnectVirtualPort, uint32 nIP,
 /// will be posted.  The connection will be in the connecting state.
 HSteamListenSocket CreateListenSocketIP( const SteamNetworkingIPAddr &localAddress )
 {
+    PRINT_DEBUG("Steam_Networking_Sockets::CreateListenSocketIP old\n");
+    return k_HSteamListenSocket_Invalid;
+}
+
+HSteamListenSocket CreateListenSocketIP( const SteamNetworkingIPAddr &localAddress, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
     PRINT_DEBUG("Steam_Networking_Sockets::CreateListenSocketIP\n");
+    return k_HSteamListenSocket_Invalid;
 }
 
 /// Creates a connection and begins talking to a "server" over UDP at the
@@ -262,7 +281,14 @@ HSteamListenSocket CreateListenSocketIP( const SteamNetworkingIPAddr &localAddre
 /// man-in-the-middle attacks.
 HSteamNetConnection ConnectByIPAddress( const SteamNetworkingIPAddr &address )
 {
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectByIPAddress old\n");
+    return k_HSteamNetConnection_Invalid;
+}
+
+HSteamNetConnection ConnectByIPAddress( const SteamNetworkingIPAddr &address, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
     PRINT_DEBUG("Steam_Networking_Sockets::ConnectByIPAddress\n");
+    return k_HSteamNetConnection_Invalid;
 }
 
 /// Like CreateListenSocketIP, but clients will connect using ConnectP2P
@@ -277,7 +303,15 @@ HSteamNetConnection ConnectByIPAddress( const SteamNetworkingIPAddr &address )
 /// when your app initializes
 HSteamListenSocket CreateListenSocketP2P( int nVirtualPort )
 {
+    PRINT_DEBUG("Steam_Networking_Sockets::CreateListenSocketP2P old %i\n", nVirtualPort);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    return new_listen_socket(nVirtualPort);
+}
+
+HSteamListenSocket CreateListenSocketP2P( int nVirtualPort, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
     PRINT_DEBUG("Steam_Networking_Sockets::CreateListenSocketP2P %i\n", nVirtualPort);
+    //TODO config options
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     return new_listen_socket(nVirtualPort);
 }
@@ -295,7 +329,7 @@ HSteamListenSocket CreateListenSocketP2P( int nVirtualPort )
 /// when your app initializes
 HSteamNetConnection ConnectP2P( const SteamNetworkingIdentity &identityRemote, int nVirtualPort )
 {
-    PRINT_DEBUG("Steam_Networking_Sockets::ConnectP2P %u\n", nVirtualPort);
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectP2P old %i\n", nVirtualPort);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
     const SteamNetworkingIPAddr *ip = identityRemote.GetIPAddr();
@@ -315,6 +349,13 @@ HSteamNetConnection ConnectP2P( const SteamNetworkingIdentity &identityRemote, i
     return socket;
 }
 
+HSteamNetConnection ConnectP2P( const SteamNetworkingIdentity &identityRemote, int nVirtualPort, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectP2P %i\n", nVirtualPort);
+    //TODO config options
+    return ConnectP2P(identityRemote, nVirtualPort);
+}
+
 /// Creates a connection and begins talking to a remote destination.  The remote host
 /// must be listening with a matching call to CreateListenSocket.
 ///
@@ -327,12 +368,14 @@ HSteamNetConnection ConnectP2P( const SteamNetworkingIdentity &identityRemote, i
 HSteamNetConnection ConnectBySteamID( CSteamID steamIDTarget, int nVirtualPort )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::ConnectBySteamID\n");
+    return k_HSteamNetConnection_Invalid;
 }
 
 //#endif
 HSteamNetConnection ConnectByIPv4Address( uint32 nIP, uint16 nPort )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::ConnectByIPv4Address\n");
+    return k_HSteamNetConnection_Invalid;
 }
 
 
@@ -379,6 +422,7 @@ EResult AcceptConnection( HSteamNetConnection hConn )
     if (connect_socket->second.status != CONNECT_SOCKET_NOT_ACCEPTED) return k_EResultInvalidState;
     connect_socket->second.status = CONNECT_SOCKET_CONNECTED;
     send_packet_new_connection(connect_socket->first);
+    launch_callback(connect_socket->first, CONNECT_SOCKET_NOT_ACCEPTED);
 
     return k_EResultOK;
 }
@@ -443,6 +487,7 @@ bool CloseConnection( HSteamNetConnection hPeer, int nReason, const char *pszDeb
 bool CloseListenSocket( HSteamListenSocket hSocket, const char *pszNotifyRemoteReason )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::CloseListenSocket old\n");
+    return false;
 }
 
 /// Destroy a listen socket.  All the connections that were accepting on the listen
@@ -510,6 +555,7 @@ void SetConnectionName( HSteamNetConnection hPeer, const char *pszName )
 bool GetConnectionName( HSteamNetConnection hPeer, char *pszName, int nMaxLen )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConnectionName\n");
+    return false;
 }
 
 
@@ -540,6 +586,7 @@ bool GetConnectionName( HSteamNetConnection hPeer, char *pszName, int nMaxLen )
 EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, ESteamNetworkingSendType eSendType )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::SendMessageToConnection old\n");
+    return k_EResultFail;
 }
 
 /// Send a message to the remote host on the specified connection.
@@ -567,6 +614,9 @@ EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, u
 /// sockets that does not write excessively small chunks will 
 /// work without any changes. 
 ///
+/// The pOutMessageNumber is an optional pointer to receive the
+/// message number assigned to the message, if sending was successful.
+///
 /// Returns:
 /// - k_EResultInvalidParam: invalid connection handle, or the individual message is too big.
 ///   (See k_cbMaxSteamNetworkingSocketsMessageSizeSend)
@@ -576,7 +626,7 @@ EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, u
 ///   we were not ready to send it.
 /// - k_EResultLimitExceeded: there was already too much data queued to be sent.
 ///   (See k_ESteamNetworkingConfig_SendBufferSize)
-virtual EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags )
+EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags, int64 *pOutMessageNumber )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::SendMessageToConnection %u, len %u, flags %i\n", hConn, cbData, nSendFlags);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
@@ -603,6 +653,50 @@ virtual EResult SendMessageToConnection( HSteamNetConnection hConn, const void *
     return k_EResultFail;
 }
 
+EResult SendMessageToConnection( HSteamNetConnection hConn, const void *pData, uint32 cbData, int nSendFlags )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::SendMessageToConnection old %u, len %u, flags %i\n", hConn, cbData, nSendFlags);
+    return SendMessageToConnection(hConn, pData, cbData, nSendFlags, NULL);
+}
+
+/// Send one or more messages without copying the message payload.
+/// This is the most efficient way to send messages. To use this
+/// function, you must first allocate a message object using
+/// ISteamNetworkingUtils::AllocateMessage.  (Do not declare one
+/// on the stack or allocate your own.)
+///
+/// You should fill in the message payload.  You can either let
+/// it allocate the buffer for you and then fill in the payload,
+/// or if you already have a buffer allocated, you can just point
+/// m_pData at your buffer and set the callback to the appropriate function
+/// to free it.  Note that if you use your own buffer, it MUST remain valid
+/// until the callback is executed.  And also note that your callback can be
+/// invoked at ant time from any thread (perhaps even before SendMessages
+/// returns!), so it MUST be fast and threadsafe.
+///
+/// You MUST also fill in:
+/// - m_conn - the handle of the connection to send the message to
+/// - m_nFlags - bitmask of k_nSteamNetworkingSend_xxx flags.
+///
+/// All other fields are currently reserved and should not be modified.
+///
+/// The library will take ownership of the message structures.  They may
+/// be modified or become invalid at any time, so you must not read them
+/// after passing them to this function.
+///
+/// pOutMessageNumberOrResult is an optional array that will receive,
+/// for each message, the message number that was assigned to the message
+/// if sending was successful.  If sending failed, then a negative EResult
+/// valid is placed into the array.  For example, the array will hold
+/// -k_EResultInvalidState if the connection was in an invalid state.
+/// See ISteamNetworkingSockets::SendMessageToConnection for possible
+/// failure codes.
+void SendMessages( int nMessages, SteamNetworkingMessage_t *const *pMessages, int64 *pOutMessageNumberOrResult )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::SendMessages\n");
+}
+
+
 /// If Nagle is enabled (its on by default) then when calling 
 /// SendMessageToConnection the message will be queued up the Nagle time
 /// before being sent to merge small messages into the same packet.
@@ -612,6 +706,7 @@ virtual EResult SendMessageToConnection( HSteamNetConnection hConn, const void *
 EResult FlushMessagesOnConnection( HSteamNetConnection hConn )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::FlushMessagesOnConnection\n");
+    return k_EResultOK;
 }
 
 static void free_steam_message_data(SteamNetworkingMessage_t *pMsg)
@@ -637,15 +732,17 @@ SteamNetworkingMessage_t *get_steam_message_connection(HSteamNetConnection hConn
     pMsg->m_cbSize = size;
     memcpy(pMsg->m_pData, connect_socket->second.data.front().data(), size);
     pMsg->m_conn = hConn;
-    pMsg->m_sender = connect_socket->second.remote_identity;
+    pMsg->m_identityPeer = connect_socket->second.remote_identity;
     pMsg->m_nConnUserData = connect_socket->second.user_data;
-    //TODO
-    //pMsg->m_usecTimeReceived =
-    //pMsg->m_nMessageNumber =
+    pMsg->m_usecTimeReceived = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - created).count();
+    pMsg->m_nMessageNumber = connect_socket->second.packet_receive_counter;
+    ++connect_socket->second.packet_receive_counter;
+
     pMsg->m_pfnFreeData = &free_steam_message_data;
     pMsg->m_pfnRelease = &delete_steam_message;
     pMsg->m_nChannel = 0;
     connect_socket->second.data.pop();
+    PRINT_DEBUG("get_steam_message_connection %u %u\n", hConn, size);
     return pMsg;
 }
 
@@ -716,6 +813,7 @@ int ReceiveMessagesOnListenSocket( HSteamListenSocket hSocket, SteamNetworkingMe
 bool GetConnectionInfo( HSteamNetConnection hConn, SteamNetConnectionInfo_t *pInfo )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConnectionInfo\n");
+    return false;
 }
 
 
@@ -738,6 +836,7 @@ bool GetConnectionInfo( HSteamNetConnection hConn, SteamNetConnectionInfo_t *pIn
 int ReceiveMessagesOnConnection( HSteamNetConnection hConn, SteamNetworkingMessage001_t **ppOutMessages, int nMaxMessages )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::ReceiveMessagesOnConnection\n");
+    return -1;
 }
  
 
@@ -752,6 +851,7 @@ int ReceiveMessagesOnConnection( HSteamNetConnection hConn, SteamNetworkingMessa
 int ReceiveMessagesOnListenSocket( HSteamListenSocket hSocket, SteamNetworkingMessage001_t **ppOutMessages, int nMaxMessages )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::ReceiveMessagesOnListenSocket\n");
+    return -1;
 }
  
 
@@ -759,6 +859,7 @@ int ReceiveMessagesOnListenSocket( HSteamListenSocket hSocket, SteamNetworkingMe
 bool GetConnectionInfo( HSteamNetConnection hConn, SteamNetConnectionInfo001_t *pInfo )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConnectionInfo\n");
+    return false;
 }
 
 
@@ -767,6 +868,7 @@ bool GetConnectionInfo( HSteamNetConnection hConn, SteamNetConnectionInfo001_t *
 bool GetQuickConnectionStatus( HSteamNetConnection hConn, SteamNetworkingQuickConnectionStatus *pStats )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetQuickConnectionStatus\n");
+    return false;
 }
 
 
@@ -780,6 +882,7 @@ bool GetQuickConnectionStatus( HSteamNetConnection hConn, SteamNetworkingQuickCo
 int GetDetailedConnectionStatus( HSteamNetConnection hConn, char *pszBuf, int cbBuf )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetDetailedConnectionStatus\n");
+    return -1;
 }
 
 /// Returns local IP and port that a listen socket created using CreateListenSocketIP is bound to.
@@ -789,6 +892,7 @@ int GetDetailedConnectionStatus( HSteamNetConnection hConn, char *pszBuf, int cb
 bool GetListenSocketAddress( HSteamListenSocket hSocket, SteamNetworkingIPAddr *address )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetListenSocketAddress\n");
+    return false;
 }
 
 /// Returns information about the listen socket.
@@ -830,6 +934,7 @@ bool GetListenSocketInfo( HSteamListenSocket hSocket, uint32 *pnIP, uint16 *pnPo
 bool CreateSocketPair( HSteamNetConnection *pOutConnection1, HSteamNetConnection *pOutConnection2, bool bUseNetworkLoopback )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::CreateSocketPair old\n");
+    return CreateSocketPair(pOutConnection1, pOutConnection2, bUseNetworkLoopback, NULL, NULL);
 }
 
 /// Create a pair of connections that are talking to each other, e.g. a loopback connection.
@@ -854,7 +959,18 @@ bool CreateSocketPair( HSteamNetConnection *pOutConnection1, HSteamNetConnection
 /// actual bound loopback port.  Otherwise, the port will be zero.
 bool CreateSocketPair( HSteamNetConnection *pOutConnection1, HSteamNetConnection *pOutConnection2, bool bUseNetworkLoopback, const SteamNetworkingIdentity *pIdentity1, const SteamNetworkingIdentity *pIdentity2 )
 {
-    PRINT_DEBUG("Steam_Networking_Sockets::CreateSocketPair\n");
+    PRINT_DEBUG("Steam_Networking_Sockets::CreateSocketPair %u %p %p\n", bUseNetworkLoopback, pIdentity1, pIdentity2);
+    if (!pOutConnection1 || !pOutConnection1) return false;
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+
+    SteamNetworkingIdentity remote_identity;
+    remote_identity.SetSteamID(settings->get_local_steam_id());
+    HSteamNetConnection con1 = new_connect_socket(remote_identity, 0, CONNECT_SOCKET_CONNECTED, k_HSteamListenSocket_Invalid, k_HSteamNetConnection_Invalid);
+    HSteamNetConnection con2 = new_connect_socket(remote_identity, 0, CONNECT_SOCKET_CONNECTED, k_HSteamListenSocket_Invalid, con1);
+    connect_sockets[con1].remote_id = con2;
+    *pOutConnection1 = con1;
+    *pOutConnection2 = con2;
+    return true;
 }
 
 /// Get the identity assigned to this interface.
@@ -865,6 +981,9 @@ bool CreateSocketPair( HSteamNetConnection *pOutConnection1, HSteamNetConnection
 bool GetIdentity( SteamNetworkingIdentity *pIdentity )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetIdentity\n");
+    if (!pIdentity) return false;
+    pIdentity->SetSteamID(settings->get_local_steam_id());
+    return true;
 }
 
 /// Indicate our desire to be ready participate in authenticated communications.
@@ -893,6 +1012,7 @@ bool GetIdentity( SteamNetworkingIdentity *pIdentity )
 ESteamNetworkingAvailability InitAuthentication()
 {
     PRINT_DEBUG("Steam_Networking_Sockets::InitAuthentication\n");
+    return k_ESteamNetworkingAvailability_Current;
 }
 
 /// Query our readiness to participate in authenticated communications.  A
@@ -905,7 +1025,131 @@ ESteamNetworkingAvailability InitAuthentication()
 ESteamNetworkingAvailability GetAuthenticationStatus( SteamNetAuthenticationStatus_t *pDetails )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetAuthenticationStatus\n");
+    return k_ESteamNetworkingAvailability_Current;
 }
+
+/// Create a new poll group.
+///
+/// You should destroy the poll group when you are done using DestroyPollGroup
+HSteamNetPollGroup CreatePollGroup()
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::CreatePollGroup\n");
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    static HSteamNetPollGroup poll_group_counter;
+    ++poll_group_counter;
+
+    HSteamNetPollGroup poll_group_number = poll_group_counter;
+    poll_groups[poll_group_number] = std::list<HSteamNetConnection>();
+    return poll_group_number;
+}
+
+/// Destroy a poll group created with CreatePollGroup().
+///
+/// If there are any connections in the poll group, they are removed from the group,
+/// and left in a state where they are not part of any poll group.
+/// Returns false if passed an invalid poll group handle.
+bool DestroyPollGroup( HSteamNetPollGroup hPollGroup )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::DestroyPollGroup\n");
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    auto group = poll_groups.find(hPollGroup);
+    if (group == poll_groups.end()) {
+        return false;
+    }
+
+    for (auto c : group->second) {
+        auto connect_socket = connect_sockets.find(c);
+        if (connect_socket != connect_sockets.end()) {
+            connect_socket->second.poll_group = k_HSteamNetPollGroup_Invalid;
+        }
+    }
+
+    poll_groups.erase(group);
+    return true;
+}
+
+/// Assign a connection to a poll group.  Note that a connection may only belong to a
+/// single poll group.  Adding a connection to a poll group implicitly removes it from
+/// any other poll group it is in.
+///
+/// You can pass k_HSteamNetPollGroup_Invalid to remove a connection from its current
+/// poll group without adding it to a new poll group.
+///
+/// If there are received messages currently pending on the connection, an attempt
+/// is made to add them to the queue of messages for the poll group in approximately
+/// the order that would have applied if the connection was already part of the poll
+/// group at the time that the messages were received.
+///
+/// Returns false if the connection handle is invalid, or if the poll group handle
+/// is invalid (and not k_HSteamNetPollGroup_Invalid).
+bool SetConnectionPollGroup( HSteamNetConnection hConn, HSteamNetPollGroup hPollGroup )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::SetConnectionPollGroup %u %u\n", hConn, hPollGroup);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    auto connect_socket = connect_sockets.find(hConn);
+    if (connect_socket == connect_sockets.end()) {
+        return false;
+    }
+
+    auto group = poll_groups.find(hPollGroup);
+    if (group == poll_groups.end() && hPollGroup != k_HSteamNetPollGroup_Invalid) {
+        return false;
+    }
+
+    HSteamNetPollGroup old_poll_group = connect_socket->second.poll_group;
+    if (old_poll_group != k_HSteamNetPollGroup_Invalid) {
+        auto group = poll_groups.find(hPollGroup);
+        if (group != poll_groups.end()) {
+            group->second.remove(hConn);
+        }
+    }
+
+    connect_socket->second.poll_group = hPollGroup;
+    if (hPollGroup == k_HSteamNetPollGroup_Invalid) {
+        return true;
+    }
+
+    group->second.push_back(hConn);
+    return true;
+}
+
+/// Same as ReceiveMessagesOnConnection, but will return the next messages available
+/// on any connection in the poll group.  Examine SteamNetworkingMessage_t::m_conn
+/// to know which connection.  (SteamNetworkingMessage_t::m_nConnUserData might also
+/// be useful.)
+///
+/// Delivery order of messages among different connections will usually match the
+/// order that the last packet was received which completed the message.  But this
+/// is not a strong guarantee, especially for packets received right as a connection
+/// is being assigned to poll group.
+///
+/// Delivery order of messages on the same connection is well defined and the
+/// same guarantees are present as mentioned in ReceiveMessagesOnConnection.
+/// (But the messages are not grouped by connection, so they will not necessarily
+/// appear consecutively in the list; they may be interleaved with messages for
+/// other connections.)
+int ReceiveMessagesOnPollGroup( HSteamNetPollGroup hPollGroup, SteamNetworkingMessage_t **ppOutMessages, int nMaxMessages )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ReceiveMessagesOnPollGroup %u %i\n", hPollGroup, nMaxMessages);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    auto group = poll_groups.find(hPollGroup);
+    if (group == poll_groups.end()) {
+        return 0;
+    }
+
+    SteamNetworkingMessage_t *msg = NULL;
+    int messages = 0;
+
+    for (auto c : group->second) {
+        while ((msg = get_steam_message_connection(c)) && messages < nMaxMessages) {
+            ppOutMessages[messages] = msg;
+            ++messages;
+        }
+    }
+
+    return messages;
+}
+
 
 //#ifndef STEAMNETWORKINGSOCKETS_OPENSOURCE
 
@@ -921,6 +1165,7 @@ ESteamNetworkingAvailability GetAuthenticationStatus( SteamNetAuthenticationStat
 bool ReceivedRelayAuthTicket( const void *pvTicket, int cbTicket, SteamDatagramRelayAuthTicket *pOutParsedTicket )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::ReceivedRelayAuthTicket\n");
+    return false;
 }
 
 
@@ -933,6 +1178,7 @@ bool ReceivedRelayAuthTicket( const void *pvTicket, int cbTicket, SteamDatagramR
 int FindRelayAuthTicketForServer( CSteamID steamID, int nVirtualPort, SteamDatagramRelayAuthTicket *pOutParsedTicket )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::FindRelayAuthTicketForServer old\n");
+    return 0;
 }
 
 /// Search cache for a ticket to talk to the server on the specified virtual port.
@@ -944,6 +1190,7 @@ int FindRelayAuthTicketForServer( CSteamID steamID, int nVirtualPort, SteamDatag
 int FindRelayAuthTicketForServer( const SteamNetworkingIdentity &identityGameServer, int nVirtualPort, SteamDatagramRelayAuthTicket *pOutParsedTicket )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::FindRelayAuthTicketForServer\n");
+    return 0;
 }
 
 /// Client call to connect to a server hosted in a Valve data center, on the specified virtual
@@ -957,7 +1204,8 @@ int FindRelayAuthTicketForServer( const SteamNetworkingIdentity &identityGameSer
 /// when your app initializes
 HSteamNetConnection ConnectToHostedDedicatedServer( const SteamNetworkingIdentity &identityTarget, int nVirtualPort )
 {
-    PRINT_DEBUG("Steam_Networking_Sockets::ConnectToHostedDedicatedServer\n");
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectToHostedDedicatedServer old\n");
+    return k_HSteamListenSocket_Invalid;
 }
 
 /// Client call to connect to a server hosted in a Valve data center, on the specified virtual
@@ -968,9 +1216,15 @@ HSteamNetConnection ConnectToHostedDedicatedServer( const SteamNetworkingIdentit
 /// connection to Steam or the central backend, or the app is restarted or crashes, etc.
 HSteamNetConnection ConnectToHostedDedicatedServer( CSteamID steamIDTarget, int nVirtualPort )
 {
-    PRINT_DEBUG("Steam_Networking_Sockets::ConnectToHostedDedicatedServer old\n");
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectToHostedDedicatedServer older\n");
+    return k_HSteamListenSocket_Invalid;
 }
 
+HSteamNetConnection ConnectToHostedDedicatedServer( const SteamNetworkingIdentity &identityTarget, int nVirtualPort, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectToHostedDedicatedServer\n");
+    return k_HSteamListenSocket_Invalid;
+}
 
 //
 // Servers hosted in Valve data centers
@@ -990,6 +1244,7 @@ uint16 GetHostedDedicatedServerPort()
 SteamNetworkingPOPID GetHostedDedicatedServerPOPID()
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetHostedDedicatedServerPOPID\n");
+    return 0;
 }
 
 
@@ -1058,7 +1313,24 @@ virtual EResult GetHostedDedicatedServerAddress( SteamDatagramHostedAddress *pRo
 /// Note that this call MUST be made through the SteamNetworkingSocketsGameServer() interface
 HSteamListenSocket CreateHostedDedicatedServerListenSocket( int nVirtualPort )
 {
-    PRINT_DEBUG("Steam_Networking_Sockets::CreateHostedDedicatedServerListenSocket %i\n", nVirtualPort);
+    PRINT_DEBUG("Steam_Networking_Sockets::CreateHostedDedicatedServerListenSocket old %i\n", nVirtualPort);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    return new_listen_socket(nVirtualPort);
+}
+
+/// Create a listen socket on the specified virtual port.  The physical UDP port to use
+/// will be determined by the SDR_LISTEN_PORT environment variable.  If a UDP port is not
+/// configured, this call will fail.
+///
+/// Note that this call MUST be made through the SteamGameServerNetworkingSockets() interface
+///
+/// If you need to set any initial config options, pass them here.  See
+/// SteamNetworkingConfigValue_t for more about why this is preferable to
+/// setting the options "immediately" after creation.
+HSteamListenSocket CreateHostedDedicatedServerListenSocket( int nVirtualPort, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::CreateHostedDedicatedServerListenSocket old %i\n", nVirtualPort);
+    //TODO config options
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     return new_listen_socket(nVirtualPort);
 }
@@ -1072,6 +1344,7 @@ HSteamListenSocket CreateHostedDedicatedServerListenSocket( int nVirtualPort )
 bool GetConnectionDebugText( HSteamNetConnection hConn, char *pOut, int nOutCCH )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConnectionDebugText\n");
+    return false;
 }
 
 
@@ -1082,6 +1355,7 @@ bool GetConnectionDebugText( HSteamNetConnection hConn, char *pOut, int nOutCCH 
 int32 GetConfigurationValue( ESteamNetworkingConfigurationValue eConfigValue )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConfigurationValue\n");
+    return -1;
 }
 
 // Returns true if successfully set
@@ -1096,6 +1370,7 @@ bool SetConfigurationValue( ESteamNetworkingConfigurationValue eConfigValue, int
 const char *GetConfigurationValueName( ESteamNetworkingConfigurationValue eConfigValue )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConfigurationValueName\n");
+    return NULL;
 }
 
 
@@ -1107,11 +1382,13 @@ const char *GetConfigurationValueName( ESteamNetworkingConfigurationValue eConfi
 int32 GetConfigurationString( ESteamNetworkingConfigurationString eConfigString, char *pDest, int32 destSize )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConfigurationString\n");
+    return -1;
 }
 
 bool SetConfigurationString( ESteamNetworkingConfigurationString eConfigString, const char *pString )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::SetConfigurationString\n");
+    return false;
 }
 
 
@@ -1119,6 +1396,7 @@ bool SetConfigurationString( ESteamNetworkingConfigurationString eConfigString, 
 const char *GetConfigurationStringName( ESteamNetworkingConfigurationString eConfigString )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConfigurationStringName\n");
+    return NULL;
 }
 
 
@@ -1129,12 +1407,14 @@ const char *GetConfigurationStringName( ESteamNetworkingConfigurationString eCon
 int32 GetConnectionConfigurationValue( HSteamNetConnection hConn, ESteamNetworkingConnectionConfigurationValue eConfigValue )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetConnectionConfigurationValue\n");
+    return -1;
 }
 
 // Returns true if successfully set
 bool SetConnectionConfigurationValue( HSteamNetConnection hConn, ESteamNetworkingConnectionConfigurationValue eConfigValue, int32 nValue )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::SetConnectionConfigurationValue\n");
+    return false;
 }
 
 /// Generate an authentication blob that can be used to securely login with
@@ -1170,6 +1450,120 @@ bool SetConnectionConfigurationValue( HSteamNetConnection hConn, ESteamNetworkin
 EResult GetGameCoordinatorServerLogin( SteamDatagramGameCoordinatorServerLogin *pLoginInfo, int *pcbSignedBlob, void *pBlob )
 {
     PRINT_DEBUG("Steam_Networking_Sockets::GetGameCoordinatorServerLogin\n");
+    return k_EResultFail;
+}
+
+//
+// Relayed connections using custom signaling protocol
+//
+// This is used if you have your own method of sending out-of-band
+// signaling / rendezvous messages through a mutually trusted channel.
+//
+
+/// Create a P2P "client" connection that does signaling over a custom
+/// rendezvous/signaling channel.
+///
+/// pSignaling points to a new object that you create just for this connection.
+/// It must stay valid until Release() is called.  Once you pass the
+/// object to this function, it assumes ownership.  Release() will be called
+/// from within the function call if the call fails.  Furthermore, until Release()
+/// is called, you should be prepared for methods to be invoked on your
+/// object from any thread!  You need to make sure your object is threadsafe!
+/// Furthermore, you should make sure that dispatching the methods is done
+/// as quickly as possible.
+///
+/// This function will immediately construct a connection in the "connecting"
+/// state.  Soon after (perhaps before this function returns, perhaps in another thread),
+/// the connection will begin sending signaling messages by calling
+/// ISteamNetworkingConnectionCustomSignaling::SendSignal.
+///
+/// When the remote peer accepts the connection (See
+/// ISteamNetworkingCustomSignalingRecvContext::OnConnectRequest),
+/// it will begin sending signaling messages.  When these messages are received,
+/// you can pass them to the connection using ReceivedP2PCustomSignal.
+///
+/// If you know the identity of the peer that you expect to be on the other end,
+/// you can pass their identity to improve debug output or just detect bugs.
+/// If you don't know their identity yet, you can pass NULL, and their
+/// identity will be established in the connection handshake.  
+///
+/// If you use this, you probably want to call ISteamNetworkingUtils::InitRelayNetworkAccess()
+/// when your app initializes
+///
+/// If you need to set any initial config options, pass them here.  See
+/// SteamNetworkingConfigValue_t for more about why this is preferable to
+/// setting the options "immediately" after creation.
+HSteamNetConnection ConnectP2PCustomSignaling( ISteamNetworkingConnectionCustomSignaling *pSignaling, const SteamNetworkingIdentity *pPeerIdentity, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectP2PCustomSignaling old\n");
+    return ConnectP2PCustomSignaling(pSignaling, pPeerIdentity, 0, nOptions, pOptions);
+}
+
+HSteamNetConnection ConnectP2PCustomSignaling( ISteamNetworkingConnectionCustomSignaling *pSignaling, const SteamNetworkingIdentity *pPeerIdentity, int nRemoteVirtualPort, int nOptions, const SteamNetworkingConfigValue_t *pOptions )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ConnectP2PCustomSignaling\n");
+    return k_HSteamNetConnection_Invalid;
+}
+
+
+/// Called when custom signaling has received a message.  When your
+/// signaling channel receives a message, it should save off whatever
+/// routing information was in the envelope into the context object,
+/// and then pass the payload to this function.
+///
+/// A few different things can happen next, depending on the message:
+///
+/// - If the signal is associated with existing connection, it is dealt
+///   with immediately.  If any replies need to be sent, they will be
+///   dispatched using the ISteamNetworkingConnectionCustomSignaling
+///   associated with the connection.
+/// - If the message represents a connection request (and the request
+///   is not redundant for an existing connection), a new connection
+///   will be created, and ReceivedConnectRequest will be called on your
+///   context object to determine how to proceed.
+/// - Otherwise, the message is for a connection that does not
+///   exist (anymore).  In this case, we *may* call SendRejectionReply
+///   on your context object.
+///
+/// In any case, we will not save off pContext or access it after this
+/// function returns.
+///
+/// Returns true if the message was parsed and dispatched without anything
+/// unusual or suspicious happening.  Returns false if there was some problem
+/// with the message that prevented ordinary handling.  (Debug output will
+/// usually have more information.)
+///
+/// If you expect to be using relayed connections, then you probably want
+/// to call ISteamNetworkingUtils::InitRelayNetworkAccess() when your app initializes
+bool ReceivedP2PCustomSignal( const void *pMsg, int cbMsg, ISteamNetworkingCustomSignalingRecvContext *pContext )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::ReceivedP2PCustomSignal\n");
+    return false;
+}
+
+//
+// Certificate provision by the application.  On Steam, we normally handle all this automatically
+// and you will not need to use these advanced functions.
+//
+
+/// Get blob that describes a certificate request.  You can send this to your game coordinator.
+/// Upon entry, *pcbBlob should contain the size of the buffer.  On successful exit, it will
+/// return the number of bytes that were populated.  You can pass pBlob=NULL to query for the required
+/// size.  (256 bytes is a very conservative estimate.)
+///
+/// Pass this blob to your game coordinator and call SteamDatagram_CreateCert.
+bool GetCertificateRequest( int *pcbBlob, void *pBlob, SteamNetworkingErrMsg &errMsg )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::GetCertificateRequest\n");
+    return false;
+}
+
+/// Set the certificate.  The certificate blob should be the output of
+/// SteamDatagram_CreateCert.
+bool SetCertificate( const void *pCertificate, int cbCertificate, SteamNetworkingErrMsg &errMsg )
+{
+    PRINT_DEBUG("Steam_Networking_Sockets::SetCertificate\n");
+    return false;
 }
 
 // TEMP KLUDGE Call to invoke all queued callbacks.

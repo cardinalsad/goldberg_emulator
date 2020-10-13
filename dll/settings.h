@@ -15,11 +15,10 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "base.h"
-#include <set>
-
 #ifndef SETTINGS_INCLUDE
 #define SETTINGS_INCLUDE
+
+#include "base.h"
 
 struct DLC_entry {
     AppId_t appID;
@@ -106,6 +105,9 @@ public:
     bool hasDLC(AppId_t appID);
     bool getDLC(unsigned int index, AppId_t &appID, bool &available, std::string &name);
 
+    //Depots
+    std::vector<DepotId_t> depots;
+
     //App Install paths
     void setAppInstallPath(AppId_t appID, std::string path);
     std::string getAppInstallPath(AppId_t appID);
@@ -129,18 +131,25 @@ public:
     std::map<std::string, Stat_config> getStats() { return stats; }
     void setStatDefiniton(std::string name, struct Stat_config stat_config) {stats[name] = stat_config; }
 
+    //subscribed lobby/group ids
+    std::set<uint64> subscribed_groups;
+
     //images
     std::map<int, struct Image_Data> images;
     int add_image(std::string data, uint32 width, uint32 height);
 
     //controller
     struct Controller_Settings controller_settings;
+    std::string glyphs_directory;
 
     //networking
     bool disable_networking = false;
 
-    //gameserver
+    //gameserver source query
     bool disable_source_query = false;
+
+    //overlay
+    bool disable_overlay = false;
 };
 
 #endif

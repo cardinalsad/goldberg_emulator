@@ -16,15 +16,23 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "settings_parser.h"
-#include <fstream>
-#include <cctype>
-#include <sstream>
-#include <iterator>
+
+static void consume_bom(std::ifstream &input)
+{
+    int bom[3];
+    bom[0] = input.get();
+    bom[1] = input.get();
+    bom[2] = input.get();
+    if (bom[0] != 0xEF || bom[1] != 0xBB || bom[2] != 0xBF) {
+        input.seekg(0);
+    }
+}
 
 static void load_custom_broadcasts(std::string broadcasts_filepath, std::set<uint32> &custom_broadcasts)
 {
-    std::ifstream broadcasts_file(broadcasts_filepath);
     PRINT_DEBUG("Broadcasts file path: %s\n", broadcasts_filepath.c_str());
+    std::ifstream broadcasts_file(broadcasts_filepath);
+    consume_bom(broadcasts_file);
     if (broadcasts_file.is_open()) {
         std::string line;
         while (std::getline(broadcasts_file, line)) {
@@ -63,6 +71,7 @@ static void load_gamecontroller_settings(Settings *settings)
         std::string controller_config_path = path + PATH_SEPARATOR + p;
         std::ifstream input( controller_config_path );
         if (input.is_open()) {
+            consume_bom(input);
             std::map<std::string, std::pair<std::set<std::string>, std::string>> button_pairs;
 
             for( std::string line; getline( input, line ); ) {
@@ -104,6 +113,8 @@ static void load_gamecontroller_settings(Settings *settings)
             PRINT_DEBUG("Added %u action names to %s\n", button_pairs.size(), action_set_name.c_str());
         }
     }
+
+    settings->glyphs_directory = path + (PATH_SEPARATOR "glyphs" PATH_SEPARATOR);
 }
 
 uint32 create_localstorage_settings(Settings **settings_client_out, Settings **settings_server_out, Local_Storage **local_storage_out)
@@ -248,6 +259,7 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
 
     bool steam_offline_mode = false;
     bool disable_networking = false;
+    bool disable_overlay = false;
     {
         std::string steam_settings_path = Local_Storage::get_game_settings_path();
 
@@ -258,6 +270,22 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
                 steam_offline_mode = true;
             } else if (p == "disable_networking.txt") {
                 disable_networking = true;
+            } else if (p == "disable_overlay.txt") {
+                disable_overlay = true;
+            } else if (p == "force_language.txt") {
+                int len = Local_Storage::get_file_data(steam_settings_path + "force_language.txt", language, sizeof(language) - 1);
+                if (len > 0) language[len] = 0;
+            } else if (p == "force_steamid.txt") {
+                char steam_id_text[32] = {};
+                if (Local_Storage::get_file_data(steam_settings_path + "force_steamid.txt", steam_id_text, sizeof(steam_id_text) - 1) > 0) {
+                    CSteamID temp_id = CSteamID((uint64)std::atoll(steam_id_text));
+                    if (temp_id.IsValid()) {
+                        user_id = temp_id;
+                    }
+                }
+            } else if (p == "force_account_name.txt") {
+                int len = Local_Storage::get_file_data(steam_settings_path + "force_account_name.txt", name, sizeof(name) - 1);
+                if (len > 0) name[len] = 0;
             }
         }
     }
@@ -270,11 +298,14 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
     settings_server->custom_broadcasts = custom_broadcasts;
     settings_client->disable_networking = disable_networking;
     settings_server->disable_networking = disable_networking;
+    settings_client->disable_overlay = disable_overlay;
+    settings_server->disable_overlay = disable_overlay;
 
     {
         std::string dlc_config_path = Local_Storage::get_game_settings_path() + "DLC.txt";
         std::ifstream input( dlc_config_path );
         if (input.is_open()) {
+            consume_bom(input);
             settings_client->unlockAllDLC(false);
             settings_server->unlockAllDLC(false);
             PRINT_DEBUG("Locking all DLC\n");
@@ -315,7 +346,9 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
     {
         std::string dlc_config_path = Local_Storage::get_game_settings_path() + "app_paths.txt";
         std::ifstream input( dlc_config_path );
+
         if (input.is_open()) {
+            consume_bom(input);
             for( std::string line; getline( input, line ); ) {
                 if (!line.empty() && line[line.length()-1] == '\n') {
                     line.pop_back();
@@ -349,6 +382,7 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
         std::string dlc_config_path = Local_Storage::get_game_settings_path() + "leaderboards.txt";
         std::ifstream input( dlc_config_path );
         if (input.is_open()) {
+            consume_bom(input);
             settings_client->setCreateUnknownLeaderboards(false);
             settings_server->setCreateUnknownLeaderboards(false);
 
@@ -390,7 +424,7 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
         std::string stats_config_path = Local_Storage::get_game_settings_path() + "stats.txt";
         std::ifstream input( stats_config_path );
         if (input.is_open()) {
-
+            consume_bom(input);
             for( std::string line; getline( input, line ); ) {
                 if (!line.empty() && line[line.length()-1] == '\n') {
                     line.pop_back();
@@ -447,6 +481,50 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
                 } else {
                     PRINT_DEBUG("Error adding stat for: %s, empty name\n", stat_name.c_str());
                 }
+            }
+        }
+    }
+
+    {
+        std::string depots_config_path = Local_Storage::get_game_settings_path() + "depots.txt";
+        std::ifstream input( depots_config_path );
+        if (input.is_open()) {
+            consume_bom(input);
+            for( std::string line; getline( input, line ); ) {
+                if (!line.empty() && line[line.length()-1] == '\n') {
+                    line.pop_back();
+                }
+
+                if (!line.empty() && line[line.length()-1] == '\r') {
+                    line.pop_back();
+                }
+
+                DepotId_t depot_id = stoul(line);
+                settings_client->depots.push_back(depot_id);
+                settings_server->depots.push_back(depot_id);
+                PRINT_DEBUG("Added depot %u\n", depot_id);
+            }
+        }
+    }
+
+    {
+        std::string depots_config_path = Local_Storage::get_game_settings_path() + "subscribed_groups.txt";
+        std::ifstream input( depots_config_path );
+        if (input.is_open()) {
+            consume_bom(input);
+            for( std::string line; getline( input, line ); ) {
+                if (!line.empty() && line[line.length()-1] == '\n') {
+                    line.pop_back();
+                }
+
+                if (!line.empty() && line[line.length()-1] == '\r') {
+                    line.pop_back();
+                }
+
+                uint64 source_id = stoull(line);
+                settings_client->subscribed_groups.insert(source_id);
+                settings_server->subscribed_groups.insert(source_id);
+                PRINT_DEBUG("Added source %llu\n", source_id);
             }
         }
     }

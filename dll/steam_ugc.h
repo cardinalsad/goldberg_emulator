@@ -37,6 +37,7 @@ public ISteamUGC008,
 public ISteamUGC009,
 public ISteamUGC010,
 public ISteamUGC012,
+public ISteamUGC013,
 public ISteamUGC
 {
     class Settings *settings;
@@ -274,6 +275,11 @@ bool AddRequiredTag( UGCQueryHandle_t handle, const char *pTagName )
     return true;
 }
 
+bool AddRequiredTagGroup( UGCQueryHandle_t handle, const SteamParamStringArray_t *pTagGroups )
+{
+    PRINT_DEBUG("Steam_UGC::AddRequiredTagGroup\n");
+    return true;
+}
 
 bool AddExcludedTag( UGCQueryHandle_t handle, const char *pTagName )
 {
@@ -665,7 +671,7 @@ uint32 GetSubscribedItems( PublishedFileId_t* pvecPublishedFileID, uint32 cMaxEn
 // get EItemState flags about item on this client
 uint32 GetItemState( PublishedFileId_t nPublishedFileID )
 {
-    PRINT_DEBUG("Steam_UGC::GetItemState\n");
+    PRINT_DEBUG("Steam_UGC::GetItemState %llu\n", nPublishedFileID);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (subscribed.count(nPublishedFileID)) {
         if (settings->isModInstalled(nPublishedFileID)) {
@@ -706,10 +712,10 @@ bool GetItemDownloadInfo( PublishedFileId_t nPublishedFileID, uint64 *punBytesDo
     return false;
 }
 
-bool GetItemInstallInfo( PublishedFileId_t nPublishedFileID, uint64 *punSizeOnDisk, char *pchFolder, uint32 cchFolderSize, bool *pbLegacyItem ) // returns true if item is installed
+bool GetItemInstallInfo( PublishedFileId_t nPublishedFileID, uint64 *punSizeOnDisk, STEAM_OUT_STRING_COUNT( cchFolderSize ) char *pchFolder, uint32 cchFolderSize, bool *pbLegacyItem ) // returns true if item is installed
 {
     PRINT_DEBUG("Steam_UGC::GetItemInstallInfo old\n");
-    return false;
+    return GetItemInstallInfo(nPublishedFileID, punSizeOnDisk, pchFolder, cchFolderSize, (uint32*) nullptr);
 }
 
 bool GetItemUpdateInfo( PublishedFileId_t nPublishedFileID, bool *pbNeedsUpdate, bool *pbIsDownloading, uint64 *punBytesDownloaded, uint64 *punBytesTotal )
@@ -721,7 +727,7 @@ bool GetItemUpdateInfo( PublishedFileId_t nPublishedFileID, bool *pbNeedsUpdate,
 bool GetItemInstallInfo( PublishedFileId_t nPublishedFileID, uint64 *punSizeOnDisk, char *pchFolder, uint32 cchFolderSize ) // returns true if item is installed
 {
     PRINT_DEBUG("Steam_UGC::GetItemInstallInfo older\n");
-    return false;
+    return GetItemInstallInfo(nPublishedFileID, punSizeOnDisk, pchFolder, cchFolderSize, (uint32*) nullptr);
 }
 
 

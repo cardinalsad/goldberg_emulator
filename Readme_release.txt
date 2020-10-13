@@ -29,6 +29,9 @@ Note that these are global so you won't have to change them for each game. For g
 If you want to change your steam_id on a per game basis, simply create a settings folder in the game unique directory (Full path: C:\Users\<Your windows user name>\AppData\Roaming\Goldberg SteamEmu Saves\<appid>\settings)
 In that settings folder create a user_steam_id.txt file that contains the valid steam id that you want to use for that game only.
 
+You can also make the emu ignore certain global settings by using a force_account_name.txt, force_language.txt or force_steamid.txt that you put in the <path where my emu lib is>\steam_settings\ folder.
+See the steam_settings.EXAMPLE folder for an example.
+
 If for some reason you want it to save in the game directory you can create a file named local_save.txt right beside steam_api(64).dll (libsteam_api.so on linux)
 The only thing that file should contain is the name of the save directory. This can be useful if you want to use different global settings like a different account name or steam id for a particular game.
 Note that this save directory will be beside where the emu dll (or .so) is which may not be the same as the game path.
@@ -40,6 +43,14 @@ In this folder, put a DLC.txt file. (path will be <path where my emu lib is>\ste
 If the DLC file is present, the emulator will only unlock the DLCs in that file. If the file is empty all DLCs will be locked.
 The contents of this file are: appid=DLC name
 See the steam_settings.EXAMPLE folder for an example.
+
+Depots:
+This is pretty rare but some games might use depot ids to see if dlcs are installed. You can provide a list of installed depots to the game with a steam_settings\depots.txt file.
+See the steam_settings.EXAMPLE folder for an example.
+
+Subscribed Groups:
+Some games like payday 2 check which groups you are subscribed in and unlock things based on that. You can provide a list of subscribed groups to the game with a steam_settings\subscribed_groups.txt file.
+See steam_settings.EXAMPLE\subscribed_groups.EXAMPLE.txt for an example for payday 2.
 
 App paths:
 Some rare games might need to be provided one or more paths to app ids. For example the path to where a dlc is installed. This sets the paths returned by the Steam_Apps::GetAppInstallDir function.
@@ -102,8 +113,11 @@ You must all be on the same LAN for it to work.
 IMPORTANT:
 Do not run more than one steam game with the same appid at the same time on the same computer with my emu or there might be network issues (dedicated servers should be fine though).
 
+Overlay (Note: at the moment this feature is only enabled in the windows experimental builds):
+The overlay can be disabled by putting a file named disable_overlay.txt in the steam_settings folder. This is for games that depend on the steam overlay to let people join multiplayer games.
+Use SHIFT-TAB to open the overlay.
 
-Controller (Note: at the moment this feature is only enabled in the windows experimental builds):
+Controller (Note: at the moment this feature is only enabled in the windows experimental builds and the linux builds):
 SteamController/SteamInput support is limited to XInput controllers. If your controller is not XInput, there are many tools (at least for windows) that you can use to make it emulate an XInput one.
 Steam uses things called action sets for controller configuration. An action set is a group of action names. Action names are bound to buttons, triggers or joysticks.
 The emulator needs to know for each action set, which button is linked to which action name. Create a ACTION_SET_NAME.txt file in the steam_settings\controller folder for every action set the game uses.
@@ -119,6 +133,9 @@ For example to get the vdf file for the game Crystar: https://steamdb.info/app/9
 If you look at: steamcontrollerconfigdetails, you will see something like: 1779660455/controller_type: controller_xbox360
 1779660455 refers to a file id that you can dl using your favorite steam workshop downloader site.
 The url would be: https://steamcommunity.com/sharedfiles/filedetails/?id=1779660455
+
+The glyphs directory contains some glyphs for the controller buttons for the games that use the GetGlyphForActionOrigin function.
+If you want to use the real steam glyphs instead of the free ones in the example directory copy them from: <Steam Directory>\tenfoot\resource\images\library\controller\api folder.
 
 Valid digital button names:
 DUP

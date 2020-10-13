@@ -15,16 +15,31 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "base.h"
-#include <vector>
-
 #ifndef LOCAL_STORAGE_INCLUDE
 #define LOCAL_STORAGE_INCLUDE
 
-#include <string>
-#include "../json/json.hpp"
+#include "base.h"
 
 #define MAX_FILENAME_LENGTH 300
+
+union image_pixel_t
+{
+    uint32_t pixel;
+    struct pixel_channels_t
+    {
+        uint8_t r;
+        uint8_t g;
+        uint8_t b;
+        uint8_t a;
+    } channels;
+};
+
+struct image_t
+{
+    size_t width;
+    size_t height;
+    std::vector<image_pixel_t> pix_map;
+};
 
 class Local_Storage {
 public:
@@ -33,6 +48,7 @@ public:
     static constexpr auto remote_storage_folder    = "remote";
     static constexpr auto stats_storage_folder     = "stats";
     static constexpr auto user_data_storage        = "local";
+    static constexpr auto screenshots_folder       = "screenshots";
     static constexpr auto game_settings_folder     = "steam_settings";
 
 private:
@@ -66,6 +82,9 @@ public:
     bool load_json(std::string full_path, nlohmann::json& json);
     bool load_json_file(std::string folder, std::string const& file, nlohmann::json& json);
     bool write_json_file(std::string folder, std::string const& file, nlohmann::json const& json);
+
+    std::vector<image_pixel_t> load_image(std::string const& image_path);
+    bool save_screenshot(std::string const& image_path, uint8_t* img_ptr, int32_t width, int32_t height, int32_t channels);
 };
 
 #endif
