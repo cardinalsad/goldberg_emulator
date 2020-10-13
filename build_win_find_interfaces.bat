@@ -1,3 +1,5 @@
+@echo off
+cd /d "%~dp0"
 mkdir release\tools
 del /Q release\tools\*
 call build_env_x86.bat

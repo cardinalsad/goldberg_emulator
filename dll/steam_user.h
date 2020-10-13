@@ -29,6 +29,7 @@ public ISteamUser016,
 public ISteamUser017,
 public ISteamUser018,
 public ISteamUser019,
+public ISteamUser020,
 public ISteamUser
 {
     Settings *settings;
@@ -82,7 +83,6 @@ bool BLoggedOn()
 CSteamID GetSteamID()
 {
     PRINT_DEBUG("Steam_User::GetSteamID\n");
-    std::lock_guard<std::recursive_mutex> lock(global_mutex);
     CSteamID id = settings->get_local_steam_id();
     
     return id;
@@ -110,6 +110,7 @@ CSteamID GetSteamID()
 int InitiateGameConnection( void *pAuthBlob, int cbMaxAuthBlob, CSteamID steamIDGameServer, uint32 unIPServer, uint16 usPortServer, bool bSecure )
 {
     PRINT_DEBUG("InitiateGameConnection %i %llu %u %u %u\n", cbMaxAuthBlob, steamIDGameServer.ConvertToUint64(), unIPServer, usPortServer, bSecure);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (cbMaxAuthBlob < INITIATE_GAME_CONNECTION_TICKET_SIZE) return 0;
     uint32 out_size = INITIATE_GAME_CONNECTION_TICKET_SIZE;
     ticket_manager->getTicketData(pAuthBlob, INITIATE_GAME_CONNECTION_TICKET_SIZE, &out_size);
@@ -149,7 +150,7 @@ bool GetUserDataFolder( char *pchBuffer, int cubBuffer )
     PRINT_DEBUG("GetUserDataFolder\n");
     if (!cubBuffer) return false;
 
-    std::string user_data = local_storage->get_path(USER_DATA_FOLDER);
+    std::string user_data = local_storage->get_path(Local_Storage::user_data_storage);
     strncpy(pchBuffer, user_data.c_str(), cubBuffer - 1);
     pchBuffer[cubBuffer - 1] = 0;
     return true;
@@ -361,7 +362,7 @@ void AdvertiseGame( CSteamID steamIDGameServer, uint32 unIPServer, uint16 usPort
 STEAM_CALL_RESULT( EncryptedAppTicketResponse_t )
 SteamAPICall_t RequestEncryptedAppTicket( void *pDataToInclude, int cbDataToInclude )
 {
-    PRINT_DEBUG("Steam_User::RequestEncryptedAppTicket\n");
+    PRINT_DEBUG("Steam_User::RequestEncryptedAppTicket %i\n", cbDataToInclude);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     EncryptedAppTicketResponse_t data;
 	data.m_eResult = k_EResultOK;
@@ -373,11 +374,23 @@ SteamAPICall_t RequestEncryptedAppTicket( void *pDataToInclude, int cbDataToIncl
 // retrieve a finished ticket
 bool GetEncryptedAppTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket )
 {
-    PRINT_DEBUG("Steam_User::GetEncryptedAppTicket\n");
-    if (!pcbTicket || !pTicket) return false;
-    if (encrypted_app_ticket.size() < cbMaxTicket) cbMaxTicket = encrypted_app_ticket.size();
+    PRINT_DEBUG("Steam_User::GetEncryptedAppTicket %i\n", cbMaxTicket);
+    if (!pcbTicket) return false;
+    unsigned int ticket_size = encrypted_app_ticket.size() + 126;
+    if (!cbMaxTicket) {
+        *pcbTicket = ticket_size;
+        return true;
+    }
+
+    if (!pTicket) return false;
+
+    //TODO figure out exact sizes?
+    if (ticket_size < cbMaxTicket) cbMaxTicket = ticket_size;
+    char ticket_base[] = {0x08, 0x01};
     memset(pTicket, 'g', cbMaxTicket);
+    memcpy(pTicket, ticket_base, sizeof(ticket_base));
     *pcbTicket = cbMaxTicket;
+
     return true;
 }
 
@@ -448,4 +461,22 @@ SteamAPICall_t GetMarketEligibility()
     PRINT_DEBUG("GetMarketEligibility\n");
     return 0;
 }
+
+// Retrieves anti indulgence / duration control for current user
+STEAM_CALL_RESULT( DurationControl_t )
+SteamAPICall_t GetDurationControl()
+{
+    PRINT_DEBUG("GetDurationControl\n");
+    return 0;
+}
+
+// Advise steam china duration control system about the online state of the game.
+// This will prevent offline gameplay time from counting against a user's
+// playtime limits.
+bool BSetDurationControlOnlineState( EDurationControlOnlineState eNewState )
+{
+    PRINT_DEBUG("BSetDurationControlOnlineState\n");
+    return false;
+}
+
 };

@@ -17,7 +17,15 @@
 
 #include "local_storage.h"
 
-#include <fstream>
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#include "../stb/stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_STATIC
+#include "../stb/stb_image_write.h"
 
 struct File_Data {
     std::string name;
@@ -75,12 +83,12 @@ int Local_Storage::store_data_settings(std::string file, char *data, unsigned in
     return -1;
 }
 
-int Local_Storage::get_file_data(std::string full_path, char *data, unsigned int max_length)
+int Local_Storage::get_file_data(std::string full_path, char *data, unsigned int max_length, unsigned int offset)
 {
     return -1;
 }
 
-int Local_Storage::get_data(std::string folder, std::string file, char *data, unsigned int max_length)
+int Local_Storage::get_data(std::string folder, std::string file, char *data, unsigned int max_length, unsigned int offset)
 {
     return -1;
 }
@@ -125,14 +133,38 @@ bool Local_Storage::update_save_filenames(std::string folder)
     return true;
 }
 
+bool Local_Storage::load_json(std::string full_path, nlohmann::json& json)
+{
+    return false;
+}
+
+bool Local_Storage::load_json_file(std::string folder, std::string const&file, nlohmann::json& json)
+{
+    return false;
+}
+
+bool Local_Storage::write_json_file(std::string folder, std::string const&file, nlohmann::json const& json)
+{
+    return false;
+}
+
 std::vector<std::string> Local_Storage::get_filenames_path(std::string path)
 {
     return std::vector<std::string>();
 }
 
+std::vector<image_pixel_t> Local_Storage::load_image(std::string const& image_path)
+{
+    return std::vector<image_pixel_t>();
+}
+
+bool Local_Storage::save_screenshot(std::string const& image_path, uint8_t* img_ptr, int32_t width, int32_t height, int32_t channels)
+{
+    return false;
+}
+
 #else
-#if defined(WIN32) || defined(_WIN32)
-#include <windows.h>
+#if defined(__WINDOWS__)
 
 static BOOL DirectoryExists(LPCSTR szPath)
 {
@@ -157,11 +189,6 @@ static void create_directory(std::string strPath)
     if (DirectoryExists(strPath.c_str()) == FALSE)
         createDirectoryRecursively(strPath);
 }
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <string.h>
-
 
 static std::vector<struct File_Data> get_filenames(std::string strPath)
 {
@@ -192,6 +219,8 @@ static std::vector<struct File_Data> get_filenames(std::string strPath)
 
 static std::vector<struct File_Data> get_filenames_recursive(std::string base_path)
 {
+    if (base_path.back() == *PATH_SEPARATOR)
+        base_path.pop_back();
     std::vector<struct File_Data> output;
     std::string strPath = base_path;
     strPath = strPath.append("\\*");
@@ -211,11 +240,11 @@ static std::vector<struct File_Data> get_filenames_recursive(std::string base_pa
                 std::string dir_name = ffd.cFileName;
 
                 std::string path = base_path;
-                path += "\\";
+                path += PATH_SEPARATOR;
                 path += dir_name;
 
                 std::vector<struct File_Data> lower = get_filenames_recursive(path);
-                std::transform(lower.begin(), lower.end(), std::back_inserter(output), [dir_name](File_Data f) {f.name = dir_name + "\\" + f.name; return f;});
+                std::transform(lower.begin(), lower.end(), std::back_inserter(output), [&dir_name](File_Data f) {f.name = dir_name + "\\" + f.name; return f;});
             } else {
                 File_Data f;
                 f.name = ffd.cFileName;
@@ -230,14 +259,7 @@ static std::vector<struct File_Data> get_filenames_recursive(std::string base_pa
     return output;
 }
 
-#else 
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <string.h>
-#include <dirent.h>
-
-#define PATH_MAX_STRING_SIZE 512
+#else
 
 /* recursive mkdir */
 static int mkdir_p(const char *dir, const mode_t mode) {
@@ -354,7 +376,7 @@ static std::vector<struct File_Data> get_filenames_recursive(std::string base_pa
                 path += dir_name;
 
                 std::vector<struct File_Data> lower = get_filenames_recursive(path);
-                std::transform(lower.begin(), lower.end(), std::back_inserter(output), [dir_name](File_Data f) {f.name = dir_name + "/" + f.name; return f;});
+                std::transform(lower.begin(), lower.end(), std::back_inserter(output), [&dir_name](File_Data f) {f.name = dir_name + "/" + f.name; return f;});
             }
         }
     }
@@ -374,13 +396,8 @@ std::string Local_Storage::get_program_path()
 
 std::string Local_Storage::get_game_settings_path()
 {
-    return get_program_path().append(GAME_SETTINGS_FOLDER).append(PATH_SEPARATOR);
+    return get_program_path().append(game_settings_folder).append(PATH_SEPARATOR);
 }
-
-#if defined(STEAM_WIN32)
-#include <shlobj.h>
-#include <sstream>
-#endif
 
 std::string Local_Storage::get_user_appdata_path()
 {
@@ -504,7 +521,7 @@ std::string Local_Storage::get_path(std::string folder)
 
 std::string Local_Storage::get_global_settings_path()
 {
-    return save_directory + SETTINGS_STORAGE_FOLDER + PATH_SEPARATOR;
+    return save_directory + settings_storage_folder + PATH_SEPARATOR;
 }
 
 std::vector<std::string> Local_Storage::get_filenames_path(std::string path)
@@ -533,22 +550,19 @@ int Local_Storage::store_data_settings(std::string file, char *data, unsigned in
     return store_file_data(get_global_settings_path(), file, data, length);
 }
 
-int Local_Storage::get_file_data(std::string full_path, char *data, unsigned int max_length)
+int Local_Storage::get_file_data(std::string full_path, char *data, unsigned int max_length, unsigned int offset)
 {
     std::ifstream myfile;
     myfile.open(full_path, std::ios::binary | std::ios::in);
     if (!myfile.is_open()) return -1;
 
-    std::streampos size = myfile.tellg();
-    myfile.seekg (0, std::ios::beg);
-    if (size > max_length) max_length = size;
-
+    myfile.seekg (offset, std::ios::beg);
     myfile.read (data, max_length);
     myfile.close();
     return myfile.gcount();
 }
 
-int Local_Storage::get_data(std::string folder, std::string file, char *data, unsigned int max_length)
+int Local_Storage::get_data(std::string folder, std::string file, char *data, unsigned int max_length, unsigned int offset)
 {
     file = sanitize_file_name(file);
     if (folder.back() != *PATH_SEPARATOR) {
@@ -556,7 +570,7 @@ int Local_Storage::get_data(std::string folder, std::string file, char *data, un
     }
 
     std::string full_path = save_directory + appid + folder + file;
-    return get_file_data(full_path, data, max_length);
+    return get_file_data(full_path, data, max_length, offset);
 }
 
 int Local_Storage::get_data_settings(std::string file, char *data, unsigned int max_length)
@@ -584,7 +598,19 @@ bool Local_Storage::file_exists(std::string folder, std::string file)
 
     std::string full_path = save_directory + appid + folder + file;
     struct stat buffer;   
-    return (stat (full_path.c_str(), &buffer) == 0);
+
+    if (stat(full_path.c_str(), &buffer) != 0)
+        return false;
+
+#if defined(STEAM_WIN32)
+    if ( buffer.st_mode & _S_IFDIR)
+        return false;
+#else
+    if (S_ISDIR(buffer.st_mode))
+        return false;
+#endif
+
+    return true;
 }
 
 unsigned int Local_Storage::file_size(std::string folder, std::string file)
@@ -665,6 +691,98 @@ bool Local_Storage::update_save_filenames(std::string folder)
     }
 
     return true;
+}
+
+bool Local_Storage::load_json(std::string full_path, nlohmann::json& json)
+{
+    std::ifstream inventory_file(full_path);
+    // If there is a file and we opened it
+    if (inventory_file)
+    {
+        inventory_file.seekg(0, std::ios::end);
+        size_t size = inventory_file.tellg();
+        std::string buffer(size, '\0');
+        inventory_file.seekg(0);
+        // Read it entirely, if the .json file gets too big,
+        // I should look into this and split reads into smaller parts.
+        inventory_file.read(&buffer[0], size);
+        inventory_file.close();
+
+        try {
+            json = std::move(nlohmann::json::parse(buffer));
+            PRINT_DEBUG("Loaded json \"%s\". Loaded %u items.\n", full_path.c_str(), json.size());
+            return true;
+        } catch (std::exception& e) {
+            PRINT_DEBUG("Error while parsing \"%s\" json: %s\n", full_path.c_str(), e.what());
+        }
+    }
+    else
+    {
+        PRINT_DEBUG("Couldn't open file \"%s\" to read json\n", full_path.c_str());
+    }
+
+    return false;
+}
+
+bool Local_Storage::load_json_file(std::string folder, std::string const&file, nlohmann::json& json)
+{
+    if (!folder.empty() && folder.back() != *PATH_SEPARATOR) {
+        folder.append(PATH_SEPARATOR);
+    }
+    std::string inv_path = std::move(save_directory + appid + folder);
+    std::string full_path = inv_path + file;
+
+    return load_json(full_path, json);
+}
+
+bool Local_Storage::write_json_file(std::string folder, std::string const&file, nlohmann::json const& json)
+{
+    if (!folder.empty() && folder.back() != *PATH_SEPARATOR) {
+        folder.append(PATH_SEPARATOR);
+    }
+    std::string inv_path = std::move(save_directory + appid + folder);
+    std::string full_path = inv_path + file;
+
+    create_directory(inv_path);
+
+    std::ofstream inventory_file(full_path, std::ios::trunc | std::ios::out);
+    if (inventory_file)
+    {
+        inventory_file << std::setw(2) << json;
+        return true;
+    }
+    
+    PRINT_DEBUG("Couldn't open file \"%s\" to write json\n", full_path.c_str());
+
+    return false;
+}
+
+std::vector<image_pixel_t> Local_Storage::load_image(std::string const& image_path)
+{
+    std::vector<image_pixel_t> res;
+    FILE* hFile = fopen(image_path.c_str(), "r");
+    if (hFile != nullptr)
+    {
+        int width, height;
+        image_pixel_t* img = (image_pixel_t*)stbi_load_from_file(hFile, &width, &height, nullptr, 4);
+        if (img != nullptr)
+        {
+            res.resize(width*height);
+            std::copy(img, img + width * height, res.begin());
+
+            stbi_image_free(img);
+        }
+        fclose(hFile);
+    }
+    return res;
+}
+
+bool Local_Storage::save_screenshot(std::string const& image_path, uint8_t* img_ptr, int32_t width, int32_t height, int32_t channels)
+{
+    std::string screenshot_path = std::move(save_directory + appid + screenshots_folder + PATH_SEPARATOR); 
+    create_directory(screenshot_path);
+    screenshot_path += image_path;
+    return stbi_write_png(screenshot_path.c_str(), width, height, channels, img_ptr, 0) == 1;
 }
 
 #endif

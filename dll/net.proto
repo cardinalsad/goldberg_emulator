@@ -79,7 +79,7 @@ message Low_Level {
     Types type = 1;
 }
 
-message Network {
+message Network_pb {
     uint32 channel = 1;
     bytes data = 2;
 
@@ -112,8 +112,7 @@ message Network_Old {
 
 message Networking_Sockets {
     enum Types {
-        CONNECTION_REQUEST_IP = 0;
-        CONNECTION_REQUEST_STEAMID = 1;
+        CONNECTION_REQUEST = 0;
         CONNECTION_ACCEPTED = 2;
         CONNECTION_END = 3;
         DATA = 4;
@@ -186,6 +185,17 @@ message Friend_Messages {
     }
 }
 
+message Steam_Messages {
+	enum Types {
+		FRIEND_CHAT = 0;
+	}
+
+	Types type = 1;
+	oneof message_data {
+		bytes message = 2;
+	}
+}
+
 message Common_Message {
     uint64 source_id = 1;
     uint64 dest_id = 2;
@@ -194,13 +204,14 @@ message Common_Message {
         Low_Level low_level = 4;
         Lobby lobby = 5;
         Lobby_Messages lobby_messages = 6;
-        Network network = 7;
+        Network_pb network = 7;
         Gameserver gameserver = 8;
         Friend friend = 9;
         Auth_Ticket auth_ticket = 10;
         Friend_Messages friend_messages = 11;
         Network_Old network_old = 12;
         Networking_Sockets networking_sockets = 13;
+        Steam_Messages steam_messages = 14;
     }
 
     uint32 source_ip = 128;

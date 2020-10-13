@@ -1,15 +1,20 @@
+.vs/*
 .vscode/*
 *.bin
 *.o
 net.pb.*
 *steam_api*
 release/*
+/build*/
 *.obj
+/dll/net.pb.cc
+/dll/net.pb.h
 base.exp
 base.lib
 rtlgenrandom*
 steamclient.exp
 steamclient.lib
+<<<<<<< .gitignore
 external
 .vs
 *.sln
@@ -18,3 +23,6 @@ Debug
 Release
 Win32
 x64
+=======
+out/*
+>>>>>>> .gitignore

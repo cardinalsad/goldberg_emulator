@@ -15,13 +15,10 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "base.h"
-
 #ifndef NETWORK_INCLUDE
 #define NETWORK_INCLUDE
 
-#include "net.pb.h"
-#include <chrono>
+#include "base.h"
 
 inline bool protobuf_message_equal(const google::protobuf::MessageLite& msg_a,
                 const google::protobuf::MessageLite& msg_b) {
@@ -37,8 +34,6 @@ typedef unsigned int sock_t;
 #else
 typedef int sock_t;
 #endif
-
-bool check_timedout(std::chrono::high_resolution_clock::time_point old, double timeout);
 
 struct IP_PORT {
     uint32 ip;
@@ -60,6 +55,7 @@ enum Callback_Ids {
     CALLBACK_ID_AUTH_TICKET,
     CALLBACK_ID_FRIEND_MESSAGES,
     CALLBACK_ID_NETWORKING_SOCKETS,
+    CALLBACK_ID_STEAM_MESSAGES,
 
     CALLBACK_IDS_MAX
 };
@@ -124,7 +120,7 @@ public:
     //NOTE: for all functions ips/ports are passed/returned in host byte order
     //ex: 127.0.0.1 should be passed as 0x7F000001
     static std::set<uint32> resolve_ip(std::string dns);
-    Networking(CSteamID id, uint32 appid, uint16 port, std::set<uint32_t> *custom_broadcasts);
+    Networking(CSteamID id, uint32 appid, uint16 port, std::set<uint32_t> *custom_broadcasts, bool disable_sockets);
     void addListenId(CSteamID id);
     void setAppID(uint32 appid);
     void Run();
@@ -134,6 +130,7 @@ public:
     bool sendToIPPort(Common_Message *msg, uint32 ip, uint16 port, bool reliable);
 
     bool setCallback(Callback_Ids id, CSteamID steam_id, void (*message_callback)(void *object, Common_Message *msg), void *object);
+    uint32 getIP(CSteamID id);
     uint32 getOwnIP();
 
     void shutDown();

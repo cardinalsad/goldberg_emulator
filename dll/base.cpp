@@ -18,49 +18,45 @@
 #include "base.h"
 #include <random>
 
-// Random device generator
-static std::random_device rd;
-static std::mt19937_64 gen(rd());
-
-template<typename T>
-static void randombytes(T& _buf)
+static void randombytes(uint8_t* buf, size_t len)
 {
     // uniform integer distribution
-    std::uniform_int_distribution<int64_t> dis;
+    static std::random_device rd;
+    static std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<uint64_t> dis;
 
-    uint8_t* buf = reinterpret_cast<uint8_t*>(&_buf);
+    while (len >= sizeof(uint64_t))
+    {
+        *reinterpret_cast<uint64_t*>(buf) = dis(gen);
+        len -= sizeof(uint64_t);
+        buf += sizeof(uint64_t);
+    }
+    while (len != 0)
+    {
+        switch (len)
+        {
+            case 1:
+                *buf = dis(gen);
+                --len;
+                ++buf;
+                break;
 
-    // Make sure we can hold our buffer size as int64_t
-    constexpr size_t rand_buf_len = sizeof(T) / sizeof(int64_t) + (sizeof(T)%sizeof(int64_t) ? 1 : 0);
-    int64_t rand_buf[rand_buf_len];
-    // Generate some (pseudo) random numbers
-    for (int i = 0; i < rand_buf_len; ++i)
-        rand_buf[i] = dis(gen);
-
-    // Copy the random bytes to buffer
-    memcpy(buf, rand_buf, sizeof(T));
+            case 2: case 3:
+                *reinterpret_cast<uint16_t*>(buf) = dis(gen);
+                len -= 2;
+                buf += 2;
+                break;
+            
+            case 4: case 5: case 6: case 7:
+                *reinterpret_cast<uint32_t*>(buf) = dis(gen);
+                len -= 4;
+                buf += 4;
+                break;
+        }
+    }
 }
 
-static void randombytes(char* buf, size_t len)
-{
-	// uniform integer distribution
-    std::uniform_int_distribution<int64_t> dis;
-
-	// Make sure we can hold our buffer size as int64_t
-	size_t rand_buf_len = len / sizeof(int64_t) + (len % sizeof(int64_t) ? 1 : 0);
-	int64_t* rand_buf = new int64_t[rand_buf_len];
-	// Generate some (pseudo) random numbers
-    for (int i = 0; i < rand_buf_len; ++i)
-        rand_buf[i] = dis(gen);
-
-	// Copy the random bytes to buffer
-	memcpy(buf, rand_buf, len);
-
-	// Don't forget to free it
-	delete[]rand_buf;
-}
-
-#ifdef STEAM_WIN32
+#ifdef __WINDOWS__
 #include <windows.h>
 #include <direct.h>
 
@@ -147,49 +143,59 @@ static unsigned generate_account_id()
 
 CSteamID generate_steam_id_user()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeIndividual);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeIndividual);
 }
 
 static CSteamID generate_steam_anon_user()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeAnonUser);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeAnonUser);
 }
 
 CSteamID generate_steam_id_server()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeGameServer);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeGameServer);
 }
 
 CSteamID generate_steam_id_anonserver()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance, k_EUniversePublic, k_EAccountTypeAnonGameServer);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance, k_EUniversePublic, k_EAccountTypeAnonGameServer);
 }
 
 CSteamID generate_steam_id_lobby()
 {
-    return CSteamID(generate_account_id(), k_unSteamUserDesktopInstance | k_EChatInstanceFlagLobby, k_EUniversePublic, k_EAccountTypeChat);
+    return CSteamID(generate_account_id(), k_unSteamUserDefaultInstance | k_EChatInstanceFlagLobby, k_EUniversePublic, k_EAccountTypeChat);
 }
 
-#ifndef STEAM_WIN32
-#include <sys/types.h>
-#include <dirent.h>
+bool check_timedout(std::chrono::high_resolution_clock::time_point old, double timeout)
+{
+    if (timeout == 0.0) return true;
+
+    std::chrono::high_resolution_clock::time_point now = std::chrono::high_resolution_clock::now();
+    if (std::chrono::duration_cast<std::chrono::duration<double>>(now - old).count() > timeout) {
+        return true;
+    }
+
+    return false;
+}
+
+#ifdef __LINUX__
 std::string get_lib_path() {
   std::string dir = "/proc/self/map_files";
   DIR *dp;
   int i = 0;
   struct dirent *ep;
   dp = opendir (dir.c_str());
-  unsigned long long int p = (unsigned long long int)&get_lib_path;
+  uintptr_t p = (uintptr_t)&get_lib_path;
 
   if (dp != NULL)
   {
     while ((ep = readdir (dp))) {
       if (memcmp(ep->d_name, ".", 2) != 0 && memcmp(ep->d_name, "..", 3) != 0) {
             char *upper = NULL;
-            unsigned long long int lower_bound = strtoull(ep->d_name, &upper, 16);
+            uintptr_t lower_bound = strtoull(ep->d_name, &upper, 16);
             if (lower_bound) {
                 ++upper;
-                unsigned long long int upper_bound = strtoull(upper, &upper, 16);
+                uintptr_t upper_bound = strtoull(upper, &upper, 16);
                 if (upper_bound && (lower_bound < p && p < upper_bound)) {
                     std::string path = dir + PATH_SEPARATOR + ep->d_name;
                     char link[PATH_MAX] = {};
@@ -212,18 +218,33 @@ std::string get_lib_path() {
 }
 #endif
 
-std::string get_full_program_path()
+std::string get_full_lib_path()
 {
     std::string program_path;
-#if defined(STEAM_WIN32)
+#if defined(__WINDOWS__)
     char   DllPath[MAX_PATH] = {0};
     GetModuleFileName((HINSTANCE)&__ImageBase, DllPath, _countof(DllPath));
     program_path = DllPath;
 #else
     program_path = get_lib_path();
 #endif
-    program_path = program_path.substr(0, program_path.rfind(PATH_SEPARATOR)).append(PATH_SEPARATOR);
     return program_path;
+}
+
+std::string get_full_program_path()
+{
+    std::string env_program_path = get_env_variable("SteamAppPath");
+    if (env_program_path.length()) {
+        if (env_program_path.back() != PATH_SEPARATOR[0]) {
+            env_program_path = env_program_path.append(PATH_SEPARATOR);
+        }
+
+        return env_program_path;
+    }
+
+    std::string program_path;
+    program_path = get_full_lib_path();
+    return program_path.substr(0, program_path.rfind(PATH_SEPARATOR)).append(PATH_SEPARATOR);
 }
 
 std::string get_current_path()
@@ -277,13 +298,15 @@ Auth_Ticket_Manager::Auth_Ticket_Manager(class Settings *settings, class Network
     this->network->setCallback(CALLBACK_ID_USER_STATUS, settings->get_local_steam_id(), &steam_auth_ticket_callback, this);
 }
 
-void Auth_Ticket_Manager::launch_callback(CSteamID id, EAuthSessionResponse resp)
+#define STEAM_TICKET_PROCESS_TIME 0.03
+
+void Auth_Ticket_Manager::launch_callback(CSteamID id, EAuthSessionResponse resp, double delay)
 {
     ValidateAuthTicketResponse_t data;
     data.m_SteamID = id;
     data.m_eAuthSessionResponse = resp;
     data.m_OwnerSteamID = id;
-    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), delay);
 }
 
 void Auth_Ticket_Manager::launch_callback_gs(CSteamID id, bool approved)
@@ -335,7 +358,7 @@ uint32 Auth_Ticket_Manager::getTicket( void *pTicket, int cbMaxTicket, uint32 *p
     GetAuthSessionTicketResponse_t data;
     data.m_hAuthTicket = ttt;
     data.m_eResult = k_EResultOK;
-    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), STEAM_TICKET_PROCESS_TIME);
 
     outbound.push_back(ticket_data);
 
@@ -404,15 +427,16 @@ EBeginAuthSessionResult Auth_Ticket_Manager::beginAuth(const void *pAuthTicket, 
     memcpy(&number, ((char *)pAuthTicket) + sizeof(uint64), sizeof(number));
     data.id = CSteamID(id);
     data.number = number;
+    data.created = std::chrono::high_resolution_clock::now();
 
     for (auto & t : inbound) {
-        if (t.id == data.id) {
+        if (t.id == data.id && !check_timedout(t.created, STEAM_TICKET_PROCESS_TIME)) {
             return k_EBeginAuthSessionResultDuplicateRequest;
         }
     }
 
     inbound.push_back(data);
-    launch_callback(steamID, k_EAuthSessionResponseOK);
+    launch_callback(steamID, k_EAuthSessionResponseOK, STEAM_TICKET_PROCESS_TIME);
     return k_EBeginAuthSessionResultOK;
 }
 
@@ -423,12 +447,18 @@ uint32 Auth_Ticket_Manager::countInboundAuth()
 
 bool Auth_Ticket_Manager::endAuth(CSteamID id)
 {
-    auto ticket = std::find_if(inbound.begin(), inbound.end(), [&id](Auth_Ticket_Data const& item) { return item.id == id; });
-    if (inbound.end() == ticket)
-        return false;
+    bool erased = false;
+    auto t = std::begin(inbound);
+    while (t != std::end(inbound)) {
+        if (t->id == id) {
+            erased = true;
+            t = inbound.erase(t);
+        } else {
+            ++t;
+        }
+    }
 
-    inbound.erase(ticket);
-    return true;
+    return erased;
 }
 
 void Auth_Ticket_Manager::Callback(Common_Message *msg)
@@ -459,6 +489,7 @@ void Auth_Ticket_Manager::Callback(Common_Message *msg)
             auto t = std::begin(inbound);
             while (t != std::end(inbound)) {
                 if (t->id.ConvertToUint64() == msg->source_id() && t->number == number) {
+                    PRINT_DEBUG("TICKET CANCELED\n");
                     launch_callback(t->id, k_EAuthSessionResponseAuthTicketCanceled);
                     t = inbound.erase(t);
                 } else {
@@ -470,8 +501,46 @@ void Auth_Ticket_Manager::Callback(Common_Message *msg)
 }
 
 #ifdef EMU_EXPERIMENTAL_BUILD
-#ifdef STEAM_WIN32
-#include "../detours/detours.h"
+#ifdef __WINDOWS__
+
+struct ips_test {
+    uint32_t ip_from;
+    uint32_t ip_to;
+};
+
+static std::vector<struct ips_test> adapter_ips;
+
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+    adapter_ips.clear();
+    for (unsigned i = 0; i < num_ips; ++i) {
+        struct ips_test ip_a;
+        PRINT_DEBUG("from: %hhu.%hhu.%hhu.%hhu\n", ((unsigned char *)&from[i])[0], ((unsigned char *)&from[i])[1], ((unsigned char *)&from[i])[2], ((unsigned char *)&from[i])[3]);
+        PRINT_DEBUG("to: %hhu.%hhu.%hhu.%hhu\n", ((unsigned char *)&to[i])[0], ((unsigned char *)&to[i])[1], ((unsigned char *)&to[i])[2], ((unsigned char *)&to[i])[3]);
+        ip_a.ip_from = ntohl(from[i]);
+        ip_a.ip_to = ntohl(to[i]);
+        if (ip_a.ip_to < ip_a.ip_from) continue;
+        if ((ip_a.ip_to - ip_a.ip_from) > (1 << 25)) continue;
+        PRINT_DEBUG("added\n");
+        adapter_ips.push_back(ip_a);
+    }
+}
+
+static bool is_adapter_ip(unsigned char *ip)
+{
+    uint32_t ip_temp = 0;
+    memcpy(&ip_temp, ip, sizeof(ip_temp));
+    ip_temp = ntohl(ip_temp);
+
+    for (auto &i : adapter_ips) {
+        if (i.ip_from <= ip_temp && ip_temp <= i.ip_to) {
+            PRINT_DEBUG("ADAPTER IP %hhu.%hhu.%hhu.%hhu\n", ip[0], ip[1], ip[2], ip[3]);
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static bool is_lan_ip(const sockaddr *addr, int namelen)
 {
@@ -482,6 +551,7 @@ static bool is_lan_ip(const sockaddr *addr, int namelen)
         unsigned char ip[4];
         memcpy(ip, &addr_in->sin_addr, sizeof(ip));
         PRINT_DEBUG("CHECK LAN IP %hhu.%hhu.%hhu.%hhu:%u\n", ip[0], ip[1], ip[2], ip[3], ntohs(addr_in->sin_port));
+        if (is_adapter_ip(ip)) return true;
         if (ip[0] == 127) return true;
         if (ip[0] == 10) return true;
         if (ip[0] == 192 && ip[1] == 168) return true;
@@ -552,13 +622,6 @@ inline bool file_exists (const std::string& name) {
   return (stat (name.c_str(), &buffer) == 0); 
 }
 
-#ifdef DETOURS_64BIT
-#define DLL_NAME "steam_api64.dll"
-#else
-#define DLL_NAME "steam_api.dll"
-#endif
-
-
 HMODULE (WINAPI *Real_GetModuleHandleA)(LPCSTR lpModuleName) = GetModuleHandleA;
 HMODULE WINAPI Mine_GetModuleHandleA(LPCSTR lpModuleName)
 {
@@ -603,12 +666,6 @@ static void load_dll()
         PRINT_DEBUG("Loaded crack file\n");
     }
 }
-
-#ifdef DETOURS_64BIT
-#define LUMA_CEG_DLL_NAME "LumaCEG_Plugin_x64.dll"
-#else
-#define LUMA_CEG_DLL_NAME "LumaCEG_Plugin_x86.dll"
-#endif
 
 static void load_lumaCEG()
 {
@@ -656,7 +713,6 @@ bool crack_SteamAPI_Init()
 
     return false;
 }
-#include <winhttp.h>
 
 HINTERNET (WINAPI *Real_WinHttpConnect)(
   IN HINTERNET     hSession,
@@ -684,6 +740,35 @@ HINTERNET WINAPI Mine_WinHttpConnect(
     }
 }
 
+HINTERNET (WINAPI *Real_WinHttpOpenRequest)(
+  IN HINTERNET hConnect,
+  IN LPCWSTR   pwszVerb,
+  IN LPCWSTR   pwszObjectName,
+  IN LPCWSTR   pwszVersion,
+  IN LPCWSTR   pwszReferrer,
+  IN LPCWSTR   *ppwszAcceptTypes,
+  IN DWORD     dwFlags
+);
+
+HINTERNET WINAPI Mine_WinHttpOpenRequest(
+  IN HINTERNET hConnect,
+  IN LPCWSTR   pwszVerb,
+  IN LPCWSTR   pwszObjectName,
+  IN LPCWSTR   pwszVersion,
+  IN LPCWSTR   pwszReferrer,
+  IN LPCWSTR   *ppwszAcceptTypes,
+  IN DWORD     dwFlags
+) {
+    PRINT_DEBUG("Mine_WinHttpOpenRequest %ls %ls %ls %ls %i\n", pwszVerb, pwszObjectName, pwszVersion, pwszReferrer, dwFlags);
+    if (dwFlags & WINHTTP_FLAG_SECURE) {
+        dwFlags ^= WINHTTP_FLAG_SECURE;
+    }
+
+    return Real_WinHttpOpenRequest(hConnect, pwszVerb, pwszObjectName, pwszVersion, pwszReferrer, ppwszAcceptTypes, dwFlags);
+}
+
+
+
 static bool network_functions_attached = false;
 BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID ) {
     switch ( dwReason ) {
@@ -700,7 +785,10 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID ) {
                 if (winhttp) {
                     Real_WinHttpConnect = (decltype(Real_WinHttpConnect))GetProcAddress(winhttp, "WinHttpConnect");
                     DetourAttach( &(PVOID &)Real_WinHttpConnect, Mine_WinHttpConnect );
+                    // Real_WinHttpOpenRequest = (decltype(Real_WinHttpOpenRequest))GetProcAddress(winhttp, "WinHttpOpenRequest");
+                    // DetourAttach( &(PVOID &)Real_WinHttpOpenRequest, Mine_WinHttpOpenRequest );
                 }
+    
                 DetourTransactionCommit();
                 network_functions_attached = true;
             }
@@ -717,6 +805,7 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID ) {
                 DetourDetach( &(PVOID &)Real_WSAConnect, Mine_WSAConnect );
                 if (Real_WinHttpConnect) {
                     DetourDetach( &(PVOID &)Real_WinHttpConnect, Mine_WinHttpConnect );
+                    // DetourDetach( &(PVOID &)Real_WinHttpOpenRequest, Mine_WinHttpOpenRequest );
                 }
                 DetourTransactionCommit();
             }
@@ -725,5 +814,15 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID ) {
 
     return TRUE;
 }
+#else
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+
+}
 #endif
+#else
+void set_adapter_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
+{
+
+}
 #endif

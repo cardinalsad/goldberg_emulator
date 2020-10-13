@@ -15,10 +15,12 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "base.h"
+#include "base.h" // For SteamItemDef_t
 
 struct Steam_Inventory_Requests {
     double timeout = 0.1;
+    bool done = false;
+    bool full_query;
 
     SteamInventoryResult_t inventory_result;
     std::chrono::system_clock::time_point time_created;
@@ -26,7 +28,7 @@ struct Steam_Inventory_Requests {
     std::vector<SteamItemInstanceID_t> instance_ids;
 
     bool result_done() {
-        return std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::system_clock::now() - time_created).count() > timeout;
+        return done;
     }
 
     uint32 timestamp() {
@@ -34,28 +36,42 @@ struct Steam_Inventory_Requests {
     }
 };
 
-
 class Steam_Inventory :
-public ISteamInventory001,
-public ISteamInventory002,
-public ISteamInventory
+    public ISteamInventory001,
+    public ISteamInventory002,
+    public ISteamInventory
 {
+public:
+    static constexpr auto items_user_file = "items.json";
+    static constexpr auto items_default_file = "default_items.json";
+
+private:
     class Settings *settings;
     class SteamCallResults *callback_results;
     class SteamCallBacks *callbacks;
+    class RunEveryRunCB *run_every_runcb;
+    class Local_Storage* local_storage;
 
     std::vector<struct Steam_Inventory_Requests> inventory_requests;
 
-struct Steam_Inventory_Requests *new_inventory_result(const SteamItemInstanceID_t *pInstanceIDs=NULL, uint32 unCountInstanceIDs=0)
+    nlohmann::json defined_items;
+    nlohmann::json user_items;
+
+    bool inventory_loaded;
+    bool call_definition_update;
+    bool item_definitions_loaded;
+
+struct Steam_Inventory_Requests* new_inventory_result(bool full_query=true, const SteamItemInstanceID_t* pInstanceIDs = NULL, uint32 unCountInstanceIDs = 0)
 {
     static SteamInventoryResult_t result;
     ++result;
 
     struct Steam_Inventory_Requests request;
     request.inventory_result = result;
+    request.full_query = full_query;
     if (pInstanceIDs && unCountInstanceIDs) {
-        for (int i = 0; i < unCountInstanceIDs; ++i)
-            request.instance_ids.push_back(pInstanceIDs[i]);
+        request.instance_ids.reserve(unCountInstanceIDs);
+        std::copy(pInstanceIDs, pInstanceIDs + unCountInstanceIDs, std::back_inserter(request.instance_ids));
     }
 
     request.time_created = std::chrono::system_clock::now();
@@ -73,13 +89,53 @@ struct Steam_Inventory_Requests *get_inventory_result(SteamInventoryResult_t res
     return &(*request);
 }
 
+void read_items_db()
+{
+    std::string items_db_path = Local_Storage::get_game_settings_path() + items_user_file;
+    PRINT_DEBUG("Items file path: %s\n", items_db_path.c_str());
+    local_storage->load_json(items_db_path, defined_items);
+}
+
+void read_inventory_db()
+{
+    // If we havn't got any inventory
+    if (!local_storage->load_json_file("", items_user_file, user_items))
+    {
+        // Try to load a default one
+        std::string items_db_path = Local_Storage::get_game_settings_path() + items_default_file;
+        PRINT_DEBUG("Default items file path: %s\n", items_db_path.c_str());
+        local_storage->load_json(items_db_path, user_items);
+    }
+}
+
 public:
 
-Steam_Inventory(class Settings *settings, class SteamCallResults *callback_results, class SteamCallBacks *callbacks)
+static void run_every_runcb_cb(void *object)
 {
-    this->settings = settings;
-    this->callbacks = callbacks;
-    this->callback_results = callback_results;
+    PRINT_DEBUG("Steam_Inventory::run_every_runcb\n");
+
+    Steam_Inventory *obj = (Steam_Inventory *)object;
+    obj->RunCallbacks();
+}
+
+Steam_Inventory(class Settings *settings, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, class RunEveryRunCB *run_every_runcb, class Local_Storage *local_storage):
+    settings(settings),
+    callback_results(callback_results),
+    callbacks(callbacks),
+    run_every_runcb(run_every_runcb),
+    local_storage(local_storage),
+    defined_items(nlohmann::json::object()),
+    user_items(nlohmann::json::object()),
+    inventory_loaded(false),
+    call_definition_update(false),
+    item_definitions_loaded(false)
+{
+    this->run_every_runcb->add(&Steam_Inventory::run_every_runcb_cb, this);
+}
+
+~Steam_Inventory()
+{
+    this->run_every_runcb->remove(&Steam_Inventory::run_every_runcb_cb, this);
 }
 
 // INVENTORY ASYNC RESULT MANAGEMENT
@@ -121,8 +177,64 @@ bool GetResultItems( SteamInventoryResult_t resultHandle,
     struct Steam_Inventory_Requests *request = get_inventory_result(resultHandle);
     if (!request) return false;
     if (!request->result_done()) return false;
+    if (!inventory_loaded) return false;
 
-    if (punOutItemsArraySize) *punOutItemsArraySize = 0;
+    if (pOutItemsArray != nullptr)
+    {
+        SteamItemDetails_t *items_array_base = pOutItemsArray;
+        uint32 max_items = *punOutItemsArraySize;
+
+        if (request->full_query) {
+            // We end if we reached the end of items or the end of buffer
+            for( auto i = user_items.begin(); i != user_items.end() && max_items; ++i, --max_items )
+            {
+                pOutItemsArray->m_iDefinition = std::stoi(i.key());
+                pOutItemsArray->m_itemId = pOutItemsArray->m_iDefinition;
+                try
+                {
+                    pOutItemsArray->m_unQuantity = i.value().get<int>();
+                }
+                catch (...)
+                {
+                    pOutItemsArray->m_unQuantity = 0;
+                }
+                pOutItemsArray->m_unFlags = k_ESteamItemNoTrade;
+                ++pOutItemsArray;
+            }
+        } else {
+            for (auto &itemid : request->instance_ids) {
+                if (!max_items) break;
+                auto it = user_items.find(std::to_string(itemid));
+                if (it != user_items.end()) {
+                    pOutItemsArray->m_iDefinition = itemid;
+                    pOutItemsArray->m_itemId = itemid;
+
+                    try
+                    {
+                        pOutItemsArray->m_unQuantity = it->get<int>();
+                    }
+                    catch (...)
+                    {
+                        pOutItemsArray->m_unQuantity = 0;
+                    }
+                    pOutItemsArray->m_unFlags = k_ESteamItemNoTrade;
+                    ++pOutItemsArray;
+                    --max_items;
+                }
+            }
+        }
+
+        *punOutItemsArraySize = pOutItemsArray - items_array_base;
+    }
+    else if (punOutItemsArraySize != nullptr)
+    {
+        if (request->full_query) {
+            *punOutItemsArraySize = user_items.size();
+        } else {
+            *punOutItemsArraySize = std::count_if(request->instance_ids.begin(), request->instance_ids.end(), [this](SteamItemInstanceID_t item_id){ return user_items.find(std::to_string(item_id)) != user_items.end();});
+        }
+    }
+
     PRINT_DEBUG("GetResultItems good\n");
     return true;
 }
@@ -206,29 +318,12 @@ bool GetAllItems( SteamInventoryResult_t *pResultHandle )
 {
     PRINT_DEBUG("GetAllItems\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    if (pResultHandle) {
-        struct Steam_Inventory_Requests *request = new_inventory_result();
-        {
-            // SteamInventoryFullUpdate_t callbacks are triggered when GetAllItems
-            // successfully returns a result which is newer / fresher than the last
-            // known result.
-            //TODO: should this always be returned for each get all item calls?
-            struct SteamInventoryFullUpdate_t data;
-            data.m_handle = request->inventory_result;
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), request->timeout);
-        }
-        {
-            struct SteamInventoryResultReady_t data;
-            data.m_handle = request->inventory_result;
-            data.m_result = k_EResultOK;
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), request->timeout);
-        }
+    struct Steam_Inventory_Requests* request = new_inventory_result();
 
+    if (pResultHandle != nullptr)
         *pResultHandle = request->inventory_result;
-        return true;
-    }
 
-    return false;
+    return true;
 }
 
 
@@ -246,14 +341,7 @@ bool GetItemsByID( SteamInventoryResult_t *pResultHandle, STEAM_ARRAY_COUNT( unC
     PRINT_DEBUG("GetItemsByID\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (pResultHandle) {
-        struct Steam_Inventory_Requests *request = new_inventory_result(pInstanceIDs, unCountInstanceIDs);
-        {
-            struct SteamInventoryResultReady_t data;
-            data.m_handle = request->inventory_result;
-            data.m_result = k_EResultOK;
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), request->timeout);
-        }
-
+        struct Steam_Inventory_Requests *request = new_inventory_result(false, pInstanceIDs, unCountInstanceIDs);
         *pResultHandle = request->inventory_result;
         return true;
     }
@@ -330,14 +418,7 @@ bool DeserializeResult( SteamInventoryResult_t *pOutResultHandle, STEAM_BUFFER_C
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     //TODO
     if (pOutResultHandle) {
-        struct Steam_Inventory_Requests *request = new_inventory_result();
-        {
-            struct SteamInventoryResultReady_t data;
-            data.m_handle = request->inventory_result;
-            data.m_result = k_EResultOK;
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), request->timeout);
-        }
-
+        struct Steam_Inventory_Requests *request = new_inventory_result(false);
         *pOutResultHandle = request->inventory_result;
         return true;
     }
@@ -359,6 +440,7 @@ bool DeserializeResult( SteamInventoryResult_t *pOutResultHandle, STEAM_BUFFER_C
 bool GenerateItems( SteamInventoryResult_t *pResultHandle, STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, STEAM_ARRAY_COUNT(unArrayLength) const uint32 *punArrayQuantity, uint32 unArrayLength )
 {
     PRINT_DEBUG("GenerateItems\n");
+    return false;
 }
 
 
@@ -370,6 +452,11 @@ STEAM_METHOD_DESC(GrantPromoItems() checks the list of promotional items for whi
 bool GrantPromoItems( SteamInventoryResult_t *pResultHandle )
 {
     PRINT_DEBUG("GrantPromoItems\n");
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
     return true;
 }
 
@@ -381,13 +468,25 @@ bool GrantPromoItems( SteamInventoryResult_t *pResultHandle )
 bool AddPromoItem( SteamInventoryResult_t *pResultHandle, SteamItemDef_t itemDef )
 {
     PRINT_DEBUG("AddPromoItem\n");
-    return false;
+    //TODO
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
+    return true;
 }
 
 bool AddPromoItems( SteamInventoryResult_t *pResultHandle, STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, uint32 unArrayLength )
 {
     PRINT_DEBUG("AddPromoItems\n");
-    return false;
+    //TODO
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
+    return true;
 }
 
 
@@ -398,6 +497,7 @@ STEAM_METHOD_DESC(ConsumeItem() removes items from the inventory permanently.)
 bool ConsumeItem( SteamInventoryResult_t *pResultHandle, SteamItemInstanceID_t itemConsume, uint32 unQuantity )
 {
     PRINT_DEBUG("ConsumeItem\n");
+    return false;
 }
 
 
@@ -414,6 +514,7 @@ bool ExchangeItems( SteamInventoryResult_t *pResultHandle,
                             STEAM_ARRAY_COUNT(unArrayDestroyLength) const SteamItemInstanceID_t *pArrayDestroy, STEAM_ARRAY_COUNT(unArrayDestroyLength) const uint32 *punArrayDestroyQuantity, uint32 unArrayDestroyLength )
 {
     PRINT_DEBUG("ExchangeItems\n");
+    return false;
 }
 
 
@@ -425,6 +526,7 @@ bool ExchangeItems( SteamInventoryResult_t *pResultHandle,
 bool TransferItemQuantity( SteamInventoryResult_t *pResultHandle, SteamItemInstanceID_t itemIdSource, uint32 unQuantity, SteamItemInstanceID_t itemIdDest )
 {
     PRINT_DEBUG("TransferItemQuantity\n");
+    return false;
 }
 
 
@@ -452,8 +554,13 @@ void SendItemDropHeartbeat()
 STEAM_METHOD_DESC(Playtime credit must be consumed and turned into item drops by your game.)
 bool TriggerItemDrop( SteamInventoryResult_t *pResultHandle, SteamItemDef_t dropListDefinition )
 {
-    PRINT_DEBUG("TriggerItemDrop\n");
+    PRINT_DEBUG("TriggerItemDrop %p %i\n", pResultHandle, dropListDefinition);
     //TODO: if gameserver return false
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Steam_Inventory_Requests* request = new_inventory_result(false);
+
+    if (pResultHandle != nullptr)
+        *pResultHandle = request->inventory_result;
     return true;
 }
 
@@ -488,6 +595,14 @@ STEAM_METHOD_DESC(LoadItemDefinitions triggers the automatic load and refresh of
 bool LoadItemDefinitions()
 {
     PRINT_DEBUG("LoadItemDefinitions\n");
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+
+    if (!item_definitions_loaded)  {
+        call_definition_update = true;
+    }
+
+    //real steam launches a SteamInventoryResultReady_t which is why I create a new inventory result
+    new_inventory_result(false);
     return true;
 }
 
@@ -501,19 +616,26 @@ bool GetItemDefinitionIDs(
             STEAM_OUT_ARRAY_COUNT(punItemDefIDsArraySize,List of item definition IDs) SteamItemDef_t *pItemDefIDs,
             STEAM_DESC(Size of array is passed in and actual size used is returned in this param) uint32 *punItemDefIDsArraySize )
 {
-    PRINT_DEBUG("GetItemDefinitionIDs\n");
-    if (!punItemDefIDsArraySize) {
+    PRINT_DEBUG("GetItemDefinitionIDs %p\n", pItemDefIDs);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    if (!punItemDefIDsArraySize)
         return false;
-    }
 
     PRINT_DEBUG("array_size %u\n", *punItemDefIDsArraySize);
-/*
-    if (pItemDefIDs) {
-        *pItemDefIDs = 0;
+
+    if (pItemDefIDs == nullptr)
+    {
+        *punItemDefIDsArraySize = defined_items.size();
+        return true;
     }
-*/
-    //*punItemDefIDsArraySize = 0;
-    return false;
+
+    if (*punItemDefIDsArraySize < defined_items.size())
+        return false;
+
+    for (auto i = defined_items.begin(); i != defined_items.end(); ++i)
+        *pItemDefIDs++ = std::stoi(i.key());
+
+    return true;
 }
 
 
@@ -529,7 +651,95 @@ bool GetItemDefinitionIDs(
 bool GetItemDefinitionProperty( SteamItemDef_t iDefinition, const char *pchPropertyName,
     STEAM_OUT_STRING_COUNT(punValueBufferSizeOut) char *pchValueBuffer, uint32 *punValueBufferSizeOut )
 {
-    PRINT_DEBUG("GetItemDefinitionProperty\n");
+    PRINT_DEBUG("GetItemDefinitionProperty %i %s\n", iDefinition, pchPropertyName);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+
+    auto item = defined_items.find(std::to_string(iDefinition));
+    if (item != defined_items.end())
+    {
+        if (pchPropertyName != nullptr)
+        {
+            // Should I check for punValueBufferSizeOut == nullptr ?
+            // Try to get the property
+            auto attr = item.value().find(pchPropertyName);
+            if (attr != item.value().end())
+            {
+                std::string val;
+                try
+                {
+                    val = attr.value().get<std::string>();
+                }
+                catch (...)
+                {
+                    pchPropertyName = "";
+                    *punValueBufferSizeOut = 0;
+                    PRINT_DEBUG("Error, item: %d, attr: %s is not a string!", iDefinition, pchPropertyName);
+                    return true;
+                }
+                if (pchValueBuffer != nullptr)
+                {
+                    // copy what we can
+                    strncpy(pchValueBuffer, val.c_str(), *punValueBufferSizeOut);
+                    *punValueBufferSizeOut = std::min(static_cast<uint32>(val.length() + 1), *punValueBufferSizeOut);
+                }
+                else
+                {
+                    // Set punValueBufferSizeOut to the property size
+                    *punValueBufferSizeOut = val.length() + 1;
+                }
+
+                if (pchValueBuffer != nullptr)
+                {
+                    // Make sure we have a null terminator
+                    pchValueBuffer[*punValueBufferSizeOut-1] = '\0';
+                }
+            }
+            // Property not found
+            else
+            {
+                *punValueBufferSizeOut = 0;
+                PRINT_DEBUG("Attr %s not found for item %d\n", pchPropertyName, iDefinition);
+                return false;
+            }
+        }
+        else // Pass a NULL pointer for pchPropertyName to get a comma - separated list of available property names.
+        {
+            // If pchValueBuffer is NULL, *punValueBufferSize will contain the suggested buffer size
+            if (pchValueBuffer == nullptr)
+            {
+                // Should I check for punValueBufferSizeOut == nullptr ?
+                *punValueBufferSizeOut = 0;
+                for (auto i = item.value().begin(); i != item.value().end(); ++i)
+                    *punValueBufferSizeOut += i.key().length() + 1; // Size of key + comma, and the last is not a comma but null char
+            }
+            else
+            {
+                // strncat always add the null terminator, so remove 1 to the string length
+                uint32_t len = *punValueBufferSizeOut-1;
+                *punValueBufferSizeOut = 0;
+                memset(pchValueBuffer, 0, len);
+                for( auto i = item.value().begin(); i != item.value().end() && len > 0; ++i )
+                {
+                    strncat(pchValueBuffer, i.key().c_str(), len);
+                    // Count how many chars we copied
+                    // Either the string length or the buffer size if its too small
+                    uint32 x = std::min(len, static_cast<uint32>(i.key().length()));
+                    *punValueBufferSizeOut += x;
+                    len -= x;
+
+                    if (len && std::distance(i, item.value().end()) != 1) // If this is not the last item, add a comma
+                        strncat(pchValueBuffer, ",", len--);
+
+                    // Always add 1, its a comma or the null terminator
+                    ++*punValueBufferSizeOut;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 
@@ -540,6 +750,7 @@ STEAM_CALL_RESULT( SteamInventoryEligiblePromoItemDefIDs_t )
 SteamAPICall_t RequestEligiblePromoItemDefinitionsIDs( CSteamID steamID )
 {
     PRINT_DEBUG("RequestEligiblePromoItemDefinitionsIDs\n");
+    return 0;
 }
 
 
@@ -552,6 +763,7 @@ bool GetEligiblePromoItemDefinitionIDs(
     STEAM_DESC(Size of array is passed in and actual size used is returned in this param) uint32 *punItemDefIDsArraySize )
 {
     PRINT_DEBUG("GetEligiblePromoItemDefinitionIDs\n");
+    return false;
 }
 
 
@@ -564,6 +776,7 @@ STEAM_CALL_RESULT( SteamInventoryStartPurchaseResult_t )
 SteamAPICall_t StartPurchase( STEAM_ARRAY_COUNT(unArrayLength) const SteamItemDef_t *pArrayItemDefs, STEAM_ARRAY_COUNT(unArrayLength) const uint32 *punArrayQuantity, uint32 unArrayLength )
 {
     PRINT_DEBUG("StartPurchase\n");
+    return 0;
 }
 
 
@@ -572,7 +785,10 @@ STEAM_CALL_RESULT( SteamInventoryRequestPricesResult_t )
 SteamAPICall_t RequestPrices()
 {
     PRINT_DEBUG("RequestPrices\n");
-    return 0;
+    SteamInventoryRequestPricesResult_t data;
+    data.m_result = k_EResultOK;
+    memcpy(data.m_rgchCurrency, "USD", 4);
+    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data), 0.2);
 }
 
 
@@ -580,6 +796,7 @@ SteamAPICall_t RequestPrices()
 uint32 GetNumItemsWithPrices()
 {
     PRINT_DEBUG("GetNumItemsWithPrices\n");
+    return 0;
 }
 
 bool GetItemsWithPrices( STEAM_ARRAY_COUNT(unArrayLength) STEAM_OUT_ARRAY_COUNT(pArrayItemDefs, Items with prices) SteamItemDef_t *pArrayItemDefs,
@@ -588,6 +805,7 @@ bool GetItemsWithPrices( STEAM_ARRAY_COUNT(unArrayLength) STEAM_OUT_ARRAY_COUNT(
 									 uint32 unArrayLength )
 {
     PRINT_DEBUG("GetItemsWithPrices\n");
+    return false;
 }
 
 // Returns item definition ids and their prices in the user's local currency.
@@ -603,6 +821,7 @@ bool GetItemsWithPrices( STEAM_ARRAY_COUNT(unArrayLength) STEAM_OUT_ARRAY_COUNT(
 bool GetItemPrice( SteamItemDef_t iDefinition, uint64 *pCurrentPrice, uint64 *pBasePrice )
 {
     PRINT_DEBUG("GetItemPrice\n");
+    return false;
 }
 
 // Retrieves the price for the item definition id
@@ -618,39 +837,100 @@ bool GetItemPrice( SteamItemDef_t iDefinition, uint64 *pPrice )
 SteamInventoryUpdateHandle_t StartUpdateProperties()
 {
     PRINT_DEBUG("StartUpdateProperties\n");
+    return 0;
 }
 
 // Remove the property on the item
 bool RemoveProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName )
 {
     PRINT_DEBUG("RemoveProperty\n");
+    return false;
 }
 
 // Accessor methods to set properties on items
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, bool bValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, int64 nValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue )
 {
     PRINT_DEBUG("SetProperty\n");
+    return false;
 }
 
 // Submit the update request by handle
 bool SubmitUpdateProperties( SteamInventoryUpdateHandle_t handle, SteamInventoryResult_t * pResultHandle )
 {
     PRINT_DEBUG("SubmitUpdateProperties\n");
+    return false;
 }
-	
+
+bool InspectItem( SteamInventoryResult_t *pResultHandle, const char *pchItemToken )
+{
+    PRINT_DEBUG("InspectItem\n");
+    return false;
+}
+
+void RunCallbacks()
+{
+    if (call_definition_update || !inventory_requests.empty()) {
+        if (!item_definitions_loaded) {
+            read_items_db();
+            item_definitions_loaded = true;
+
+            //only gets called once
+            //also gets called when getting items
+            SteamInventoryDefinitionUpdate_t data = {};
+            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), 0.05);
+        }
+
+        call_definition_update = false;
+    }
+
+    if (!inventory_requests.empty() && !inventory_loaded) {
+        read_inventory_db();
+        inventory_loaded = true;
+    }
+
+    if (inventory_loaded)
+    {
+        std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+        for (auto& r : inventory_requests) {
+            if (!r.done && std::chrono::duration_cast<std::chrono::duration<double>>(now - r.time_created).count() > r.timeout) {
+                if (r.full_query) {
+                    // SteamInventoryFullUpdate_t callbacks are triggered when GetAllItems
+                    // successfully returns a result which is newer / fresher than the last
+                    // known result.
+                    struct SteamInventoryFullUpdate_t data;
+                    data.m_handle = r.inventory_result;
+                    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+                }
+
+                {
+                    struct SteamInventoryResultReady_t data;
+                    data.m_handle = r.inventory_result;
+                    data.m_result = k_EResultOK;
+                    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+                }
+
+                r.done = true;
+            }
+        }
+    }
+}
+
 };

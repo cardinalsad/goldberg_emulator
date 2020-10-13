@@ -27,7 +27,11 @@
 #include "steam_remote_storage.h"
 #include "steam_screenshots.h"
 #include "steam_http.h"
+#ifdef CONTROLLER_SUPPORT
 #include "steam_controller.h"
+#else
+#include "steam_controller_disabled.h"
+#endif
 #include "steam_ugc.h"
 #include "steam_applist.h"
 #include "steam_music.h"
@@ -39,16 +43,25 @@
 #include "steam_game_coordinator.h"
 #include "steam_networking_socketsserialized.h"
 #include "steam_networking_sockets.h"
+#include "steam_networking_messages.h"
 #include "steam_networking_utils.h"
 #include "steam_unified_messages.h"
 #include "steam_gamesearch.h"
 #include "steam_parties.h"
+#include "steam_remoteplay.h"
+#include "steam_tv.h"
 
 #include "steam_gameserver.h"
 #include "steam_gameserverstats.h"
 #include "steam_masterserver_updater.h"
 
-#include <thread>
+#include "../overlay_experimental/steam_overlay.h"
+
+enum Steam_Pipe {
+    NO_USER,
+    CLIENT,
+    SERVER
+};
 
 class Steam_Client :
 public ISteamClient007,
@@ -62,6 +75,8 @@ public ISteamClient014,
 public ISteamClient015,
 public ISteamClient016,
 public ISteamClient017,
+public ISteamClient018,
+public ISteamClient019,
 public ISteamClient
 {
 public:
@@ -94,11 +109,14 @@ public:
     Steam_Parental *steam_parental;
     Steam_Networking_Sockets *steam_networking_sockets;
     Steam_Networking_Sockets_Serialized *steam_networking_sockets_serialized;
+    Steam_Networking_Messages *steam_networking_messages;
     Steam_Game_Coordinator *steam_game_coordinator;
     Steam_Networking_Utils *steam_networking_utils;
     Steam_Unified_Messages *steam_unified_messages;
     Steam_Game_Search *steam_game_search;
     Steam_Parties *steam_parties;
+    Steam_RemotePlay *steam_remoteplay;
+    Steam_TV *steam_tv;
 
     Steam_GameServer *steam_gameserver;
     Steam_Utils *steam_gameserver_utils;
@@ -110,12 +128,20 @@ public:
     Steam_Apps *steam_gameserver_apps;
     Steam_Networking_Sockets *steam_gameserver_networking_sockets;
     Steam_Networking_Sockets_Serialized *steam_gameserver_networking_sockets_serialized;
+    Steam_Networking_Messages *steam_gameserver_networking_messages;
     Steam_Game_Coordinator *steam_gameserver_game_coordinator;
     Steam_Masterserver_Updater *steam_masterserver_updater;
+
+    Steam_Overlay* steam_overlay;
 
     bool user_logged_in = false;
     bool server_init = false;
     std::thread background_keepalive;
+    bool steamclient_server_inited = false;
+    std::atomic<unsigned long long> last_cb_run;
+
+    unsigned steam_pipe_counter = 1;
+    std::map<HSteamPipe, enum Steam_Pipe> steam_pipes;
 
     Steam_Client();
     ~Steam_Client();
@@ -150,6 +176,7 @@ public:
 	// set the local IP and Port to bind to
 	// this must be set before CreateLocalUser()
 	void SetLocalIPBinding( uint32 unIP, uint16 usPort ); 
+    void SetLocalIPBinding( const SteamIPAddress_t &unIP, uint16 usPort );
 
 	// returns the ISteamFriends interface
 	ISteamFriends *GetISteamFriends( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
@@ -257,6 +284,9 @@ public:
     // Steam Parties interface
     ISteamParties *GetISteamParties( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
 
+    // Steam Remote Play interface
+    ISteamRemotePlay *GetISteamRemotePlay( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
+
     void RegisterCallback( class CCallbackBase *pCallback, int iCallback);
     void UnregisterCallback( class CCallbackBase *pCallback);
 
@@ -268,6 +298,9 @@ public:
     void userLogIn();
     void serverInit();
     void serverShutdown();
+    void clientShutdown();
     bool IsServerInit();
     bool IsUserLogIn();
+
+    void DestroyAllInterfaces();
 };

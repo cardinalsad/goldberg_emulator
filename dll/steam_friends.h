@@ -15,9 +15,19 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef __INCLUDED_STEAM_FRIENDS_H__
+#define __INCLUDED_STEAM_FRIENDS_H__
+
 #include "base.h"
+#include "../overlay_experimental/steam_overlay.h"
 
 #define SEND_FRIEND_RATE 4.0
+
+struct Avatar_Numbers {
+    int smallest;
+    int medium;
+    int large;
+};
 
 class Steam_Friends : 
 public ISteamFriends004,
@@ -40,12 +50,13 @@ public ISteamFriends
     class SteamCallBacks *callbacks;
     class SteamCallResults *callback_results;
     class RunEveryRunCB *run_every_runcb;
+    class Steam_Overlay* overlay;
 
     Friend us;
     bool modified;
     std::vector<Friend> friends;
 
-    unsigned img_count;
+    std::map<uint64, struct Avatar_Numbers> avatars;
     CSteamID lobby_id;
 
     std::chrono::high_resolution_clock::time_point last_sent_friends;
@@ -82,6 +93,28 @@ bool isAppIdCompatible(Friend *f)
     return settings->get_local_game_id().AppID() == f->appid();
 }
 
+struct Avatar_Numbers add_friend_avatars(CSteamID id)
+{
+    uint64 steam_id = id.ConvertToUint64();
+    auto avatar_ids = avatars.find(steam_id);
+    if (avatar_ids != avatars.end()) {
+        return avatar_ids->second;
+    }
+
+    //TODO: get real image data from self/other peers
+    struct Avatar_Numbers avatar_numbers;
+    std::string small_avatar(32 * 32 * 4, 0);
+    std::string medium_avatar(64 * 64 * 4, 0);
+    std::string large_avatar(184 * 184 * 4, 0);
+
+    avatar_numbers.smallest = settings->add_image(small_avatar, 32, 32);
+    avatar_numbers.medium = settings->add_image(medium_avatar, 64, 64);
+    avatar_numbers.large = settings->add_image(large_avatar, 184, 184);
+
+    avatars[steam_id] = avatar_numbers;
+    return avatar_numbers;
+}
+
 public:
 static void steam_friends_callback(void *object, Common_Message *msg)
 {
@@ -99,13 +132,14 @@ static void steam_friends_run_every_runcb(void *object)
     steam_friends->RunCallbacks();
 }
 
-Steam_Friends(class Settings *settings, class Networking *network, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, class RunEveryRunCB *run_every_runcb)
+Steam_Friends(Settings* settings, Networking* network, SteamCallResults* callback_results, SteamCallBacks* callbacks, RunEveryRunCB* run_every_runcb, Steam_Overlay* overlay):
+    settings(settings),
+    network(network),
+    callbacks(callbacks),
+    callback_results(callback_results),
+    run_every_runcb(run_every_runcb),
+    overlay(overlay)
 {
-    this->settings = settings;
-    this->network = network;
-    this->callbacks = callbacks;
-    this->callback_results = callback_results;
-    this->run_every_runcb = run_every_runcb;
     this->network->setCallback(CALLBACK_ID_FRIEND, settings->get_local_steam_id(), &Steam_Friends::steam_friends_callback, this);
     this->network->setCallback(CALLBACK_ID_FRIEND_MESSAGES, settings->get_local_steam_id(), &Steam_Friends::steam_friends_callback, this);
     this->network->setCallback(CALLBACK_ID_USER_STATUS, settings->get_local_steam_id(), &Steam_Friends::steam_friends_callback, this);
@@ -121,12 +155,9 @@ Steam_Friends(class Settings *settings, class Networking *network, class SteamCa
 
 static bool ok_friend_flags(int iFriendFlags)
 {
-    if (iFriendFlags & k_EFriendFlagBlocked) return false;
-    if (iFriendFlags & k_EFriendFlagIgnored) return false;
-    if (iFriendFlags & k_EFriendFlagIgnoredFriend) return false;
-    if (iFriendFlags & k_EFriendFlagFriendshipRequested) return false;
-    if (iFriendFlags & k_EFriendFlagRequestingFriendship) return false;
-    return true;
+    if (iFriendFlags & k_EFriendFlagImmediate) return true;
+
+    return false;
 }
 
 // returns the local players name - guaranteed to not be NULL.
@@ -183,11 +214,11 @@ EPersonaState GetPersonaState()
 // then GetFriendByIndex() can then be used to return the id's of each of those users
 int GetFriendCount( int iFriendFlags )
 {
-    PRINT_DEBUG("Steam_Friends::GetFriendCount\n");
+    PRINT_DEBUG("Steam_Friends::GetFriendCount %i\n", iFriendFlags);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     int count = 0;
     if (ok_friend_flags(iFriendFlags)) count = friends.size();
-    
+    PRINT_DEBUG("count %i\n", count);
     return count;
 }
 
@@ -446,7 +477,7 @@ SteamAPICall_t DownloadClanActivityCounts( STEAM_ARRAY_COUNT(cClansToRequest) CS
 // steamIDSource can be the steamID of a group, game server, lobby or chat room
 int GetFriendCountFromSource( CSteamID steamIDSource )
 {
-    PRINT_DEBUG("Steam_Friends::GetFriendCountFromSource\n");
+    PRINT_DEBUG("Steam_Friends::GetFriendCountFromSource %llu\n", steamIDSource.ConvertToUint64());
     //TODO
     return 0;
 }
@@ -465,6 +496,10 @@ bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource )
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (steamIDUser == settings->get_local_steam_id()) {
         if (settings->get_lobby() == steamIDSource) {
+            return true;
+        }
+
+        if (settings->subscribed_groups.find(steamIDSource.ConvertToUint64()) != settings->subscribed_groups.end()) {
             return true;
         }
     } else {
@@ -489,6 +524,7 @@ void SetInGameVoiceSpeaking( CSteamID steamIDUser, bool bSpeaking )
 void ActivateGameOverlay( const char *pchDialog )
 {
     PRINT_DEBUG("Steam_Friends::ActivateGameOverlay %s\n", pchDialog);
+    overlay->OpenOverlay(pchDialog);
 }
 
 
@@ -545,15 +581,17 @@ void SetPlayedWith( CSteamID steamIDUserPlayedWith )
 void ActivateGameOverlayInviteDialog( CSteamID steamIDLobby )
 {
     PRINT_DEBUG("Steam_Friends::ActivateGameOverlayInviteDialog\n");
-    // TODO: Here open the overlay
+    overlay->OpenOverlayInvite(steamIDLobby);
 }
 
 // gets the small (32x32) avatar of the current user, which is a handle to be used in IClientUtils::GetImageRGBA(), or 0 if none set
 int GetSmallFriendAvatar( CSteamID steamIDFriend )
 {
     PRINT_DEBUG("Steam_Friends::GetSmallFriendAvatar\n");
-    ++img_count;
-    return (img_count * 3) + 1;
+    //IMPORTANT NOTE: don't change friend avatar numbers for the same friend or else some games endlessly allocate stuff.
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Avatar_Numbers numbers = add_friend_avatars(steamIDFriend);
+    return numbers.smallest;
 }
 
 
@@ -561,8 +599,9 @@ int GetSmallFriendAvatar( CSteamID steamIDFriend )
 int GetMediumFriendAvatar( CSteamID steamIDFriend )
 {
     PRINT_DEBUG("Steam_Friends::GetMediumFriendAvatar\n");
-    ++img_count;
-    return (img_count * 3) + 2;
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Avatar_Numbers numbers = add_friend_avatars(steamIDFriend);
+    return numbers.medium;
 }
 
 
@@ -571,8 +610,9 @@ int GetMediumFriendAvatar( CSteamID steamIDFriend )
 int GetLargeFriendAvatar( CSteamID steamIDFriend )
 {
     PRINT_DEBUG("Steam_Friends::GetLargeFriendAvatar\n");
-    ++img_count;
-    return (img_count * 3) + 0;
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    struct Avatar_Numbers numbers = add_friend_avatars(steamIDFriend);
+    return numbers.large;
 }
 
 int GetFriendAvatar( CSteamID steamIDFriend, int eAvatarSize )
@@ -671,19 +711,19 @@ bool SetRichPresence( const char *pchKey, const char *pchValue )
     PRINT_DEBUG("Steam_Friends::SetRichPresence %s %s\n", pchKey, pchValue ? pchValue : "NULL");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (pchValue) {
-        #ifdef SHOW_DIALOG_RICH_CONNECT
-        if (std::string(pchKey) == std::string("connect"))
-            MessageBox(0, pchValue, pchKey, MB_OK);
-        #endif
-        (*us.mutable_rich_presence())[pchKey] = pchValue;
+        auto prev_value = (*us.mutable_rich_presence()).find(pchKey);
+        if (prev_value == (*us.mutable_rich_presence()).end() || prev_value->second != pchValue) {
+            (*us.mutable_rich_presence())[pchKey] = pchValue;
+            modified = true;
+        }
     } else {
         auto to_remove = us.mutable_rich_presence()->find(pchKey);
         if (to_remove != us.mutable_rich_presence()->end()) {
             us.mutable_rich_presence()->erase(to_remove);
+            modified = true;
         }
     }
-    modified = true;
-    
+
     return true;
 }
 
@@ -826,8 +866,13 @@ AppId_t GetFriendCoplayGame( CSteamID steamIDFriend )
 STEAM_CALL_RESULT( JoinClanChatRoomCompletionResult_t )
 SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan )
 {
-    PRINT_DEBUG("Steam_Friends::JoinClanChatRoom\n");
-    return 0;
+    PRINT_DEBUG("Steam_Friends::JoinClanChatRoom %llu\n", steamIDClan.ConvertToUint64());
+    //TODO actually join a room
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    JoinClanChatRoomCompletionResult_t data;
+    data.m_steamIDClanChat = steamIDClan;
+    data.m_eChatRoomEnterResponse = k_EChatRoomEnterResponseSuccess;
+    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
 }
 
 bool LeaveClanChatRoom( CSteamID steamIDClan )
@@ -949,6 +994,20 @@ int GetNumChatsWithUnreadPriorityMessages()
     return 0;
 }
 
+void ActivateGameOverlayRemotePlayTogetherInviteDialog( CSteamID steamIDLobby )
+{
+    PRINT_DEBUG("Steam_Friends::ActivateGameOverlayRemotePlayTogetherInviteDialog\n");
+}
+
+// Call this before calling ActivateGameOverlayToWebPage() to have the Steam Overlay Browser block navigations
+// to your specified protocol (scheme) uris and instead dispatch a OverlayBrowserProtocolNavigation_t callback to your game.
+// ActivateGameOverlayToWebPage() must have been called with k_EActivateGameOverlayToWebPageMode_Modal
+bool RegisterProtocolInOverlayBrowser( const char *pchProtocol )
+{
+    PRINT_DEBUG("Steam_Friends::RegisterProtocolInOverlayBrowser\n");
+    return false;
+}
+
 void RunCallbacks()
 {
 	PRINT_DEBUG("Steam_Friends::RunCallbacks\n");
@@ -981,6 +1040,7 @@ void Callback(Common_Message *msg)
             auto f = std::find_if(friends.begin(), friends.end(), [&id](Friend const& item) { return item.id() == id; });
             if (friends.end() != f) {
                 persona_change((uint64)f->id(), k_EPersonaChangeStatus);
+                overlay->FriendDisconnect(*f);
                 friends.erase(f);
             }
         }
@@ -1006,6 +1066,7 @@ void Callback(Common_Message *msg)
         if (!f) {
             if (msg->friend_().id() != settings->get_local_steam_id().ConvertToUint64()) {
                 friends.push_back(msg->friend_());
+                overlay->FriendConnect(msg->friend_());
                 persona_change((uint64)msg->friend_().id(), k_EPersonaChangeName);
             }
         } else {
@@ -1026,23 +1087,50 @@ void Callback(Common_Message *msg)
     if (msg->has_friend_messages()) {
         if (msg->friend_messages().type() == Friend_Messages::LOBBY_INVITE) {
             PRINT_DEBUG("Steam_Friends Got Lobby Invite\n");
-            //TODO: the user should accept the invite first but we auto accept it because there's no gui yet
-            GameLobbyJoinRequested_t data;
-            data.m_steamIDLobby = CSteamID((uint64)msg->friend_messages().lobby_id());
-            data.m_steamIDFriend = CSteamID((uint64)msg->source_id());
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+            Friend *f = find_friend((uint64)msg->source_id());
+            if (f) {
+                LobbyInvite_t data;
+                data.m_ulSteamIDUser = msg->source_id();
+                data.m_ulSteamIDLobby = msg->friend_messages().lobby_id();
+                data.m_ulGameID = f->appid();
+                callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+
+                if (overlay->Ready())
+                {
+                    //TODO: the user should accept the invite first but we auto accept it because there's no gui yet
+                    // Then we will handle it !
+                    overlay->SetLobbyInvite(*find_friend(static_cast<uint64>(msg->source_id())), msg->friend_messages().lobby_id());
+                }
+                else
+                {
+                    GameLobbyJoinRequested_t data;
+                    data.m_steamIDLobby = CSteamID((uint64)msg->friend_messages().lobby_id());
+                    data.m_steamIDFriend = CSteamID((uint64)msg->source_id());
+                    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+                }
+            }
         }
 
         if (msg->friend_messages().type() == Friend_Messages::GAME_INVITE) {
             PRINT_DEBUG("Steam_Friends Got Game Invite\n");
             //TODO: I'm pretty sure that the user should accept the invite before this is posted but we do like above
-            std::string const& connect_str = msg->friend_messages().connect_str();
-            GameRichPresenceJoinRequested_t data = {};
-            data.m_steamIDFriend = CSteamID((uint64)msg->source_id());
-            strncpy(data.m_rgchConnect, connect_str.c_str(), k_cchMaxRichPresenceValueLength - 1);
-            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+            if (overlay->Ready())
+            {
+                // Then we will handle it !
+                overlay->SetRichInvite(*find_friend(static_cast<uint64>(msg->source_id())), msg->friend_messages().connect_str().c_str());
+            }
+            else
+            {
+                std::string const& connect_str = msg->friend_messages().connect_str();
+                GameRichPresenceJoinRequested_t data = {};
+                data.m_steamIDFriend = CSteamID((uint64)msg->source_id());
+                strncpy(data.m_rgchConnect, connect_str.c_str(), k_cchMaxRichPresenceValueLength - 1);
+                callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+            }
         }
     }
 }
 
 };
+
+#endif//__INCLUDED_STEAM_FRIENDS_H__
