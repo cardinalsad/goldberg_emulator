@@ -40,6 +40,16 @@
     #define __LINUX__
 #endif
 
+#if defined(__APPLE__)
+    #if defined(__x86_64__)
+        #define __APPLE_64__
+        #define __64BITS__
+    #else
+        #define __APPLE_32__
+        #define __32BITS__
+    #endif
+#endif
+
 #if defined(__WINDOWS__)
     #define STEAM_WIN32
     #ifndef NOMINMAX
@@ -145,7 +155,8 @@
 #include <stdio.h>
 
 // Other libs includes
-#include "../json/json.hpp"
+#include <nlohmann/json.hpp>
+#include <nlohmann/fifo_map.hpp>
 #include "../controller/gamepad.h"
 
 // Steamsdk includes
