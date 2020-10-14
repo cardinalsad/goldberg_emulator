@@ -69,8 +69,6 @@
     #include <iphlpapi.h> // Include winsock2 before this, or winsock2 iphlpapi will be unavailable
     #include <shlobj.h>
 
-    #define MSG_NOSIGNAL 0
-
     #define SystemFunction036 NTAPI SystemFunction036
     #include <ntsecapi.h>
     #undef SystemFunction036
@@ -96,7 +94,15 @@
         #endif
     #endif
 
-#elif defined(__LINUX__)
+#elif defined(__LINUX__) || defined(__APPLE__)
+    #if defined(__LINUX__)
+        // Insert here Linux specific headers
+    #else
+		// Insert here MacOS specific headers
+        #include <sys/sysctl.h>
+        #include <mach-o/dyld_images.h>
+    #endif
+	#include <ifaddrs.h>// getifaddrs
     #include <arpa/inet.h>
 
     #include <sys/types.h>
@@ -109,7 +115,6 @@
     #include <sys/time.h>
 
     #include <netinet/in.h>
-    #include <linux/netdevice.h>
 
     #include <fcntl.h>
     #include <unistd.h>
@@ -124,7 +129,13 @@
         #define PRINT_DEBUG(...) {FILE *t = fopen("STEAM_LOG.txt", "a"); fprintf(t, __VA_ARGS__); fclose(t);}
     #endif
     #define PATH_SEPARATOR "/" 
+	
 #endif
+
+#ifndef MSG_NOSIGNAL
+	#define MSG_NOSIGNAL 0
+#endif
+
 //#define PRINT_DEBUG(...) fprintf(stdout, __VA_ARGS__)
 #ifdef EMU_RELEASE_BUILD
     #define PRINT_DEBUG(...)

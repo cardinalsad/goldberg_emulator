@@ -120,68 +120,39 @@ static void get_broadcast_info(uint16 port)
     }
 }
 
-#elif defined(__linux__)
+#elif defined(__LINUX__) || defined(__APPLE__)
 
 static void get_broadcast_info(uint16 port)
 {
-    /* Not sure how many platforms this will run on,
-     * so it's wrapped in __linux for now.
-     * Definitely won't work like this on Windows...
-     */
-    number_broadcasts = 0;
-    sock_t sock = 0;
+	ifaddrs* ifaces_list;
 
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-        return;
+	number_broadcasts = 0;
+	if (getifaddrs(&ifaces_list) == 0)
+	{
+		const sockaddr_in* sock_addr;
+		for (ifaddrs* pIface = ifaces_list; pIface != nullptr; pIface = pIface->ifa_next)
+		{
+			if (pIface->ifa_addr->sa_family == AF_INET)
+			{
+				sock_addr = reinterpret_cast<const sockaddr_in*>(pIface->ifa_addr);
+				if (sock_addr->sin_addr.s_addr != 0 && pIface->ifa_netmask != nullptr)
+				{
+					uint32_t ip = reinterpret_cast<const sockaddr_in*>(pIface->ifa_addr)->sin_addr.s_addr;
+					uint32_t mask = reinterpret_cast<const sockaddr_in*>(pIface->ifa_netmask)->sin_addr.s_addr;
 
-    /* Configure ifconf for the ioctl call. */
-    struct ifreq i_faces[MAX_BROADCASTS];
-    memset(i_faces, 0, sizeof(struct ifreq) * MAX_BROADCASTS);
-
-    struct ifconf ifconf;
-    ifconf.ifc_buf = (char *)i_faces;
-    ifconf.ifc_len = sizeof(i_faces);
-
-    if (ioctl(sock, SIOCGIFCONF, &ifconf) < 0) {
-        close(sock);
-        return;
-    }
-
-    /* ifconf.ifc_len is set by the ioctl() to the actual length used;
-     * on usage of the complete array the call should be repeated with
-     * a larger array, not done (640kB and 16 interfaces shall be
-     * enough, for everybody!)
-     */
-    int i, count = ifconf.ifc_len / sizeof(struct ifreq);
-
-    for (i = 0; i < count; i++) {
-        /* there are interfaces with are incapable of broadcast */
-        if (ioctl(sock, SIOCGIFBRDADDR, &i_faces[i]) < 0)
-            continue;
-
-        /* moot check: only AF_INET returned (backwards compat.) */
-        if (i_faces[i].ifr_broadaddr.sa_family != AF_INET)
-            continue;
-
-        struct sockaddr_in *sock4 = (struct sockaddr_in *)&i_faces[i].ifr_broadaddr;
-
-        if (number_broadcasts >= MAX_BROADCASTS) {
-            close(sock);
-            return;
-        }
-
-        IP_PORT *ip_port = &broadcasts[number_broadcasts];
-        ip_port->ip = sock4->sin_addr.s_addr;
-
-        if (ip_port->ip == 0) {
-            continue;
-        }
-
-        ip_port->port = port;
-        number_broadcasts++;
-    }
-
-    close(sock);
+					IP_PORT *ip_port = &broadcasts[number_broadcasts++];
+					ip_port->ip = ip | ~mask;
+					ip_port->port = port;
+				}
+			}
+			// IPV6
+			//else if (pIface->ifa_addr->sa_family == AF_INET6)
+			//{
+			//    const sockaddr_in6* addr = reinterpret_cast<const sockaddr_in6*>(pIface->ifa_addr);));
+			//}
+		}
+		freeifaddrs(ifaces_list);
+	}
 }
 #endif
 
