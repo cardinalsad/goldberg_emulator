@@ -4,6 +4,204 @@ stages:
   - deploy
   - page_deploy
 
+static:linux:deps:
+  stage: dependencies
+  image: nemirtingas/linux_vcpkg:ubuntu18
+  #when: manual
+
+  script:
+    - apt update && apt -y install libgl1-mesa-dev libgl1-mesa-dev:i386
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - TRIPLET=x86-linux-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[openssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - TRIPLET=x64-linux-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[openssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - exit 0
+
+  cache:
+    key: static-linux-deps-cache
+    paths:
+      - vcpkg
+  artifacts:
+    paths:
+      - vcpkg
+    expire_in: 1 day
+
+static:windows:deps:
+  stage: dependencies
+  image: nemirtingas/windowscross_vcpkg:msvc2019
+  #when: manual
+
+  script:
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - TRIPLET=x64-linux
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf:${TRIPLET} || exit 1
+    - TRIPLET=x86-windows-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[winssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - TRIPLET=x64-windows-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[winssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - exit 0
+
+  cache:
+    key: static-windows-deps-cache
+    paths:
+      - vcpkg
+  artifacts:
+    paths:
+      - vcpkg
+    expire_in: 1 day
+
+static:macosx:deps:
+  stage: dependencies
+  image: nemirtingas/osxcross_vcpkg:SDK10.13
+  #when: manual
+
+  script:
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - TRIPLET=x64-linux
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf:${TRIPLET} || exit 1
+    - TRIPLET=x86-macosx-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[openssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - TRIPLET=x64-macosx-goldberg
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[openssl]:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - exit 0
+
+  cache:
+    key: static-macosx-deps-cache
+    paths:
+      - vcpkg/
+  artifacts:
+    paths:
+      - vcpkg/
+    expire_in: 1 day
+
+build:linux:
+  stage: build
+  image: nemirtingas/linux_vcpkg:ubuntu18
+  dependencies:
+    - static:linux:deps
+  needs:
+    - static:linux:deps
+
+  script:
+    - apt update && apt -y install libgl1-mesa-dev libgl1-mesa-dev:i386
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - TOOLCHAIN="/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    - TRIPLET=x86-linux-goldberg
+    - OUT=linux32/Release
+    - cmake -G Ninja -Wno-dev  -DX86=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+    - TRIPLET=x64-linux-goldberg
+    - OUT=linux64/Release
+    - cmake -G Ninja -Wno-dev  -DX64=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+    - exit 0
+
+  artifacts:
+    paths:
+      - release/
+      - debug/
+    expire_in: 1 day
+
+build:windows:
+  stage: build
+  image: nemirtingas/windowscross_vcpkg:msvc2019
+  dependencies:
+    - static:windows:deps
+  needs:
+    - static:windows:deps
+
+  script:
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - TOOLCHAIN="/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    - CHAINLOAD="/clang_windows_sdk/clang-cl-msvc.cmake"
+    - export HOST_ARCH=x86
+    - TRIPLET=x86-windows-goldberg
+    - OUT=win32/Release
+    - cmake -G Ninja -Wno-dev -DX86=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${CHAINLOAD}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+    - export HOST_ARCH=x64
+    - TRIPLET=x64-windows-goldberg
+    - OUT=win64/Release
+    - cmake -G Ninja -Wno-dev -DX64=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${CHAINLOAD}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+  artifacts:
+    paths:
+      - release/
+      - debug/
+    expire_in: 1 day
+
+build:macosx:
+  stage: build
+  image: nemirtingas/osxcross_vcpkg:SDK10.13
+  dependencies:
+    - static:macosx:deps
+  needs:
+    - static:macosx:deps
+
+  script:
+    - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
+    - TOOLCHAIN="/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    - CHAINLOAD="/osxcross/target/toolchain.cmake"
+    - export OSXCROSS_HOST=i386-apple-${OSXCROSS_TARGET}
+    - TRIPLET=x86-macosx-goldberg
+    - OUT=macosx32/Release
+    - cmake -G Ninja -Wno-dev -DX86=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${CHAINLOAD}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+    - export OSXCROSS_HOST=x86_64-apple-${OSXCROSS_TARGET}
+    - TRIPLET=x64-macosx-goldberg
+    - OUT=macosx64/Release
+    - cmake -G Ninja -Wno-dev -DX64=ON -DCMAKE_BUILD_TYPE=Release "-DVCPKG_TARGET_TRIPLET=${TRIPLET}" "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}" "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${CHAINLOAD}" "-D_VCPKG_INSTALLED_DIR=${VCPKG_PATH}" -S . -B "${OUT}"
+    - cmake --build "${OUT}"
+    - cmake --install "${OUT}"
+    - mkdir release/macosx
+    - x86_64-apple-${OSXCROSS_TARGET}-lipo -create release/macosx*/steamclient.dylib -output release/macosx/steamclient.dylib
+
+  artifacts:
+    paths:
+      - release/
+      - debug/
+    expire_in: 1 day
+
 protobuf_static_steamos:
   stage: dependencies
   image: tianon/steamos
@@ -39,6 +237,8 @@ build_steamos:
   image: tianon/steamos
   dependencies:
     - protobuf_static_steamos
+  needs:
+    - protobuf_static_steamos
 
   before_script:
       - apt update && apt -y install gcc-4.9 g++-4.9 git libtool g++-4.9-multilib gcc-4.9-multilib
@@ -57,6 +257,8 @@ build_steamos:
 build_windows:
   stage: build
   image: fedora:29
+  needs:
+    - protobuf_static_steamos
 
   script:
       - dnf -y install wine wget p7zip sed dos2unix
@@ -92,66 +294,6 @@ build_windows:
   artifacts:
     paths:
       - release/
-    expire_in: 1 day
-
-build_cmake_linux:
-  stage: build
-  image: ubuntu
-  when: manual
-
-  before_script:
-    - export DEBIAN_FRONTEND=noninteractive
-    - apt update -y
-    - apt install build-essential cmake libprotobuf-dev protobuf-compiler ninja-build -y
-
-  script:
-    - mkdir cmake-builds && cd cmake-builds
-    - mkdir x64-release && cd x64-release
-    - cmake ../../ -G "Ninja" -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" && ninja
-    - cd ..
-#    - mkdir x64-experimental-release && cd x64-experimental-release
-#    - cmake ../../ -G "Ninja" -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" -DEMU_EXPERIMENTAL_BUILD:BOOL=ON && ninja
-#    - cd ..
-
-  artifacts:
-    paths:
-      - cmake-builds/
-    expire_in: 1 day
-
-build_cmake_windows:
-  stage: build
-  image: fedora:29
-  when: manual
-
-  before_script:
-    - dnf -y install wine wget p7zip sed dos2unix unzip
-    - wget 'https://gitlab.com/Mr_Goldberg/goldberg_emulator/uploads/48db8f434a193aae872279dc4f5dde6a/sdk_standalone.7z'
-    - 7za x sdk_standalone.7z -osdk_standalone
-    - wget 'https://github.com/Kitware/CMake/releases/download/v3.15.0-rc1/cmake-3.15.0-rc1-win64-x64.zip'
-    - 7za x cmake-3.15.0-rc1-win64-x64.zip
-    - wget 'https://gitlab.com/Mr_Goldberg/goldberg_emulator/uploads/0119304e030098b4821d73170fe52084/protobuf_x64-windows-static.7z'
-    - 7za x protobuf_x64-windows-static.7z -oprotobuf_x64-windows-static
-
-  script:
-    - export WINEDEBUG=-all
-    - wine cmd /c
-    - mkdir cmake-builds && cd cmake-builds
-    - mkdir x64-release && cd x64-release
-    - echo call .\\..\\..\\sdk_standalone\\set_vars64.bat >> cmake-build.bat
-    - echo .\\..\\..\\cmake-3.15.0-rc1-win64-x64\\bin\\cmake.exe ..\\.. -G \"NMake Makefiles\" -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" -DCMAKE_PREFIX_PATH="protobuf_x64-windows-static" -DProtobuf_PROTOC_EXECUTABLE:STRING="./../../protobuf_x64-windows-static/tools/protobuf/protoc.exe" >> cmake-build.bat
-    - echo nmake.exe >> cmake-build.bat
-    - wine cmd /c cmake-build.bat
-    - cd ..
-    - mkdir x64-experimental-release && cd x64-experimental-release
-    - echo call .\\..\\..\\sdk_standalone\\set_vars64.bat >> cmake-build.bat
-    - echo .\\..\\..\\cmake-3.15.0-rc1-win64-x64\\bin\\cmake.exe ..\\.. -G \"NMake Makefiles\" -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" -DEMU_EXPERIMENTAL_BUILD=ON -DEMU_OVERLAY=ON -DCMAKE_PREFIX_PATH="protobuf_x64-windows-static" -DProtobuf_PROTOC_EXECUTABLE:STRING="./../../protobuf_x64-windows-static/tools/protobuf/protoc.exe" >> cmake-build.bat
-    - echo nmake.exe >> cmake-build.bat
-    - wine cmd /c cmake-build.bat
-    - cd ..
-
-  artifacts:
-    paths:
-      - cmake-builds/
     expire_in: 1 day
 
 deploy_all:

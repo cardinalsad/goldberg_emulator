@@ -4,33 +4,182 @@ cmake_minimum_required(VERSION 3.6)
 # Set the project name
 project(goldberg_emulator)
 
-if(MSVC)
-  # Set static environment (results in static compile flags) if Visual Studio is used (dynamic by default)
-	# Officially recommended solution: https://gitlab.kitware.com/cmake/community/wikis/FAQ#how-can-i-build-my-msvc-application-with-a-static-runtime
-	# Should be replaced by a better solution in the future: https://gitlab.kitware.com/cmake/cmake/merge_requests/3211
-	foreach(flag_var
-		CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
-		CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
-		if(${flag_var} MATCHES "/MD")
-		  string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
-		endif(${flag_var} MATCHES "/MD")
-	endforeach(flag_var)
-
-	# Disable MSVC++ warning C4996: 'may be unsafe/disable deprecation'
-	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+# Workaround because cross-compiling with CMake + vcpkg fucks up this variable
+# making the 'find_*' functions/macros somehow fail to find the right arch.
+# There are conditions like
+#  CMAKE_SIZEOF_VOID_P = "4" then look for i386 libraries...
+# or
+#  CMAKE_SIZEOF_VOID_P = "8" then look for x86_64 libraries...
+if(X86 AND NOT X64)
+  set(CMAKE_SIZEOF_VOID_P "4")
+elseif(X64 AND NOT X86)
+  set(CMAKE_SIZEOF_VOID_P "8")
+else()
+  message(FATAL_ERROR "Please define either -DX86=ON or -DX64=ON")
 endif()
 
-# Add option to enable experimental build
-option(EMU_EXPERIMENTAL_BUILD "Enable experimental build" OFF)
+if(WIN32) # Setup some variables for Windows build
+  if(MSVC) # If building with MSVC
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS) # Disable warning about strncpy_s and his friends
+    #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:\"msvcrtd.lib\"")       # Disable this linkage
+    #set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /NODEFAULTLIB:\"msvcrtd.lib\"") # Disable this linkage
+    set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE) # Force to only build Debug & Release projects
 
-# Set CXX standard
+    set(CompilerFlags
+        CMAKE_CXX_FLAGS
+        CMAKE_CXX_FLAGS_DEBUG
+        CMAKE_CXX_FLAGS_RELEASE
+        CMAKE_C_FLAGS
+        CMAKE_C_FLAGS_DEBUG
+        CMAKE_C_FLAGS_RELEASE
+        )
+    foreach(CompilerFlag ${CompilerFlags})
+      string(REPLACE "/MD" "/MT" ${CompilerFlag} "${${CompilerFlag}}")
+    endforeach()
+    
+  endif()
+
+  if(X64)
+    set(LIB_STEAM_API steam_api64)
+	set(LIB_STEAMCLIENT steamclient64)
+    set(OUT_DIR win64)
+  elseif(X86)
+    set(LIB_STEAM_API steam_api)
+    set(LIB_STEAMCLIENT steamclient)
+    set(OUT_DIR win32)
+  else()
+    message(FATAL_ERROR "Arch unknown")
+  endif()
+
+  file(
+    GLOB
+    OVERLAY_EXPERIMENTAL_SRC_SHARED
+	overlay_experimental/*.cpp
+    overlay_experimental/windows/*.cpp
+	ImGui/*.cpp
+    ImGui/impls/*.cpp
+    ImGui/impls/windows/*.cpp
+  )
+  
+  set(overlay_includes
+    overlay/
+    overlay/windows/
+  )
+
+elseif(APPLE)
+  if(X64)
+    # Global flags for building steamapi (64bits)
+    set(CMAKE_C_FLAGS             "${CMAKE_C_FLAGS} -m64")
+    set(CMAKE_CXX_FLAGS           "${CMAKE_CXX_FLAGS} -m64")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -m64")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -m64")
+    #set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -m64")
+    set(OUT_DIR macosx64)
+  elseif(X86)
+    # Global flags for building steamapi (32bits)
+    set(CMAKE_C_FLAGS             "${CMAKE_C_FLAGS} -m32")
+    set(CMAKE_CXX_FLAGS           "${CMAKE_CXX_FLAGS} -m32")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -m32")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -m32")
+    #set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -m32")
+    set(OUT_DIR macosx32)
+  else()
+    message(FATAL_ERROR "Arch unknown")
+  endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+
+  set(LIB_STEAM_API steam_api)
+  set(LIB_STEAMCLIENT steamclient)
+
+  file(
+    GLOB
+    OVERLAY_EXPERIMENTAL_SRC_SHARED
+    overlay/*.cpp
+  )
+  
+  set(overlay_includes
+    overlay/
+  )
+
+elseif(UNIX)
+  if(X64)
+    # Global flags for building steamapi (64bits)
+    set(CMAKE_C_FLAGS             "${CMAKE_C_FLAGS} -m64")
+    set(CMAKE_CXX_FLAGS           "${CMAKE_CXX_FLAGS} -m64")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -m64")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -m64")
+    #set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -m64")
+    set(OUT_DIR linux64)
+  elseif(X86)
+    # Global flags for building steamapi (32bits)
+    set(CMAKE_C_FLAGS             "${CMAKE_C_FLAGS} -m32")
+    set(CMAKE_CXX_FLAGS           "${CMAKE_CXX_FLAGS} -m32")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -m32")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -m32")
+    #set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -m32")
+    set(OUT_DIR linux32)
+  else()
+    message(FATAL_ERROR "Arch unknown")
+  endif()
+  set(LIB_STEAM_API steam_api)
+  set(LIB_STEAMCLIENT steamclient)
+
+  file(
+    GLOB
+    OVERLAY_EXPERIMENTAL_SRC_SHARED
+	overlay_experimental/*.cpp
+	overlay_experimental/linux/*.cpp
+	ImGui/*.cpp
+    ImGui/impls/*.cpp
+    ImGui/impls/linux/*.cpp
+  )
+
+  set(overlay_includes
+    overlay/
+    overlay/linux/
+  )
+
+else()
+  message(FATAL_ERROR "No CMake for other platforms")
+
+endif()
+
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Find the protobuf compiler and libraries
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# Add option to enable experimental build
+option(EMU_EXPERIMENTAL_BUILD "Enable experimental build" OFF)
+if(EMU_EXPERIMENTAL_BUILD)
+	if(APPLE)
+		set(EMU_OVERLAY OFF)
+	else()
+		option(EMU_OVERLAY "Enable the emulator overlay" ON)
+	endif()
+else()
+	set(EMU_OVERLAY OFF)
+endif()
+
+set(Protobuf_USE_STATIC_LIBS ON)
 include(FindProtobuf)
-find_package(Protobuf 3.1.0 REQUIRED)
+find_package(Threads REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(CURL CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(nlohmann-fifo-map CONFIG REQUIRED)
+find_path(STB_INCLUDE_DIRS "stb.h")
+
+if(NOT WIN32)
+	find_package(OpenSSL REQUIRED)
+endif()
+
+if(NOT APPLE)
+	find_package(GLEW REQUIRED)
+endif()
 
 # Generate the .h and .cxx files for dll/net.proto
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS dll/net.proto)
@@ -38,34 +187,6 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS dll/net.proto)
 # Print path to generated files
 message(STATUS "PROTO_SRCS = ${PROTO_SRCS}")
 message(STATUS "PROTO_HDRS = ${PROTO_HDRS}")
-message(STATUS "PROTOBUF_INCLUDE_DIRS = ${PROTOBUF_INCLUDE_DIRS}")
-message(STATUS "PROTOBUF_LIBRARIES = ${PROTOBUF_LIBRARIES}")
-message(STATUS "PROTOBUF_PROTOC_EXECUTABLE = ${PROTOBUF_PROTOC_EXECUTABLE}")
-
-# Setup the lib/exe names for the targets
-if(WIN32)
-  if("${CMAKE_SIZEOF_VOID_P}" EQUAL "8")
-    set(LIB_STEAM_API steam_api64)
-	  set(LIB_STEAMCLIENT steamclient64)
-	  set(LIB_STEAMNETWORKINGSOCKETS steamnetworkingsockets64)
-	  set(BIN_LOBBY_CONNECT lobby_connect64)
-	  set(BIN_GENERATE_INTERFACES_FILE generate_interfaces_file64)
-  else()
-    set(LIB_STEAM_API steam_api)
-	  set(LIB_STEAMCLIENT steamclient)
-	  set(LIB_STEAMNETWORKINGSOCKETS steamnetworkingsockets)
-	  set(BIN_LOBBY_CONNECT lobby_connect)
-	  set(BIN_GENERATE_INTERFACES_FILE generate_interfaces_file)
-  endif()
-elseif(UNIX AND NOT APPLE)
-  set(LIB_STEAM_API steam_api)
-	set(LIB_STEAMCLIENT steamclient)
-	set(LIB_STEAMNETWORKINGSOCKETS steamnetworkingsockets)
-	set(BIN_LOBBY_CONNECT lobby_connect)
-	set(BIN_GENERATE_INTERFACES_FILE generate_interfaces_file)
-else()
-	message(FATAL_ERROR "Other platforms not supported...")
-endif()
 
 # Gather the files that are shared between multiple targets
 file(GLOB DLL_SRC_SHARED
@@ -77,166 +198,165 @@ file(GLOB DETOURS_SRC_SHARED
 	detours/*.cpp
 )
 
-if(WIN32)
-  file(GLOB OVERLAY_EXPERIMENTAL_SRC_SHARED
-    overlay_experimental/*.cpp
-    overlay_experimental/windows/*.cpp
-    ImGui/*.cpp
-    ImGui/impls/*.cpp
-    ImGui/impls/windows/*.cpp
-    glew/glew.c
-  )
-elseif(UNIX)
-  file(GLOB OVERLAY_EXPERIMENTAL_SRC_SHARED
-    overlay_experimental/*.cpp
-    overlay_experimental/linux/*.cpp
-    ImGui/*.cpp
-    ImGui/impls/*.cpp
-    ImGui/impls/linux/*.cpp
-    glew/glew.c
-  )
-endif()
-
 ###################################################
 # Setup for the steam_api(64).dll / libsteam_api.so
 ###################################################
 
 # Setup the target
 add_library(${LIB_STEAM_API}
-  SHARED
+	SHARED
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:${DETOURS_SRC_SHARED}>
 	$<$<AND:$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:${OVERLAY_EXPERIMENTAL_SRC_SHARED}>
-  ${DLL_SRC_SHARED}
-  ${PROTO_SRCS}
-  ${PROTO_HDRS}
+	${DLL_SRC_SHARED}
+	${PROTO_SRCS}
+	${PROTO_HDRS}
 )
 
 # Include the required directories
-target_include_directories(${LIB_STEAM_API}
-  PRIVATE
-  ${PROTOBUF_INCLUDE_DIRS}
-  ${CMAKE_CURRENT_BINARY_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/ImGui
-  ${CMAKE_CURRENT_SOURCE_DIR}/glew/include
+target_include_directories(
+	${LIB_STEAM_API}
+	PRIVATE
+	${CMAKE_CURRENT_BINARY_DIR}
+	${STB_INCLUDE_DIRS}
+	
+	overlay_experimental
 )
 
 # Link the required libraries
 target_link_libraries(${LIB_STEAM_API}
 	PRIVATE
-	protobuf::libprotobuf
+	Threads::Threads
+	protobuf::libprotobuf-lite
+	#nlohmann_json::nlohmann_json doesn't work
+	nlohmann-fifo-map::nlohmann-fifo-map
+	
+	$<$<NOT:$<BOOL:${APPLE}>>:GLEW::GLEW>
+	
+	$<$<BOOL:${WIN32}>:comdlg32>
+	$<$<BOOL:${WIN32}>:advapi32>
+	$<$<BOOL:${WIN32}>:shell32>
+	$<$<BOOL:${WIN32}>:user32>
 	$<$<BOOL:${WIN32}>:ws2_32>
 	$<$<BOOL:${WIN32}>:iphlpapi>
 	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:opengl32.lib>
-	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:Winmm.lib>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:winmm.lib>
+	
+	# For library UNIX loading
+	$<$<NOT:$<BOOL:${WIN32}>>:dl>
+	# For overlay opengl
+	$<$<AND:$<BOOL:${UNIX}>,$<NOT:$<BOOL:${APPLE}>>>:GL>
 )
 
 # Add target compile definitions
 target_compile_definitions(${LIB_STEAM_API}
 	PRIVATE
+	GLEW_NO_GLU
+	STBI_NO_SIMD
+	
 	$<$<CONFIG:>:EMU_RELEASE_BUILD>
-  $<$<CONFIG:Release>:EMU_RELEASE_BUILD>
+	$<$<CONFIG:Release>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:RelWithDebInfo>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:MinSizeRel>:EMU_RELEASE_BUILD>
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:EMU_EXPERIMENTAL_BUILD>
 	$<$<BOOL:${EMU_OVERLAY}>:EMU_OVERLAY>
-	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:GLEW_STATIC>
 )
-
-# Install the target
-if(WIN32)
-  install(TARGETS
-    ${LIB_STEAM_API}
-    RUNTIME DESTINATION ./
-  )
-else()
-	install(TARGETS
-    ${LIB_STEAM_API}
-    LIBRARY DESTINATION ./
-  )
-endif()
 
 ########################################################
 # Setup for the steamclient(64).dll / libsteamclient.so?
 ########################################################
 
+if(UNIX)
+  SET_TARGET_PROPERTIES(${LIB_STEAMCLIENT} PROPERTIES PREFIX "")
+endif()
+
 # Setup the target
 add_library(${LIB_STEAMCLIENT}
 	SHARED
-	steamclient.cpp
+	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:${DETOURS_SRC_SHARED}>
+	$<$<AND:$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:${OVERLAY_EXPERIMENTAL_SRC_SHARED}>
+	${DLL_SRC_SHARED}
+	${PROTO_SRCS}
+	${PROTO_HDRS}
+)
+
+# Include the required directories
+target_include_directories(
+	${LIB_STEAMCLIENT}
+	PRIVATE
+	${CMAKE_CURRENT_BINARY_DIR}
+	${STB_INCLUDE_DIRS}
+	
+	overlay_experimental
+)
+
+# Link the required libraries
+target_link_libraries(${LIB_STEAMCLIENT}
+	PRIVATE
+	Threads::Threads
+	protobuf::libprotobuf-lite
+	#nlohmann_json::nlohmann_json doesn't work
+	nlohmann-fifo-map::nlohmann-fifo-map
+	
+	$<$<NOT:$<BOOL:${APPLE}>>:GLEW::GLEW>
+	
+	$<$<BOOL:${WIN32}>:comdlg32>
+	$<$<BOOL:${WIN32}>:advapi32>
+	$<$<BOOL:${WIN32}>:shell32>
+	$<$<BOOL:${WIN32}>:user32>
+	$<$<BOOL:${WIN32}>:ws2_32>
+	$<$<BOOL:${WIN32}>:iphlpapi>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:opengl32.lib>
+	$<$<AND:$<BOOL:${WIN32}>,$<BOOL:${EMU_EXPERIMENTAL_BUILD}>,$<BOOL:${EMU_OVERLAY}>>:winmm.lib>
+	
+	# For library UNIX loading
+	$<$<NOT:$<BOOL:${WIN32}>>:dl>
+	# For overlay opengl
+	$<$<AND:$<BOOL:${UNIX}>,$<NOT:$<BOOL:${APPLE}>>>:GL>
 )
 
 # Add target compile definitions
 target_compile_definitions(${LIB_STEAMCLIENT}
 	PRIVATE
+	GLEW_NO_GLU
+	STBI_NO_SIMD
+	STEAMCLIENT_DLL
+	
 	$<$<CONFIG:>:EMU_RELEASE_BUILD>
-  $<$<CONFIG:Release>:EMU_RELEASE_BUILD>
+	$<$<CONFIG:Release>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:RelWithDebInfo>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:MinSizeRel>:EMU_RELEASE_BUILD>
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:EMU_EXPERIMENTAL_BUILD>
+	$<$<BOOL:${EMU_OVERLAY}>:EMU_OVERLAY>
 )
-
-# Install the target
-if(WIN32)
-  install(TARGETS
-    ${LIB_STEAMCLIENT}
-    RUNTIME DESTINATION ./
-  )
-else()
-	install(TARGETS
-    ${LIB_STEAMCLIENT}
-    LIBRARY DESTINATION ./
-  )
-endif()
-
-if(NOT WIN32)
-  message(STATUS "Target library 'steamclient' is only suported for windows at this time... Disabling Build ALL inclusion for this target")
-	set_target_properties(${LIB_STEAMCLIENT} PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
-endif()
 
 ##############################################################################
 # Setup for the steamnetworkingsockets(64).dll / libsteamnetworkingsockets.so?
 ##############################################################################
 
 # Setup the target
-add_library(${LIB_STEAMNETWORKINGSOCKETS}
+add_library(steamnetworkingsockets
 	SHARED
 	steamnetworkingsockets.cpp
 )
 
 # Add target compile definitions
-target_compile_definitions(${LIB_STEAMNETWORKINGSOCKETS}
+target_compile_definitions(steamnetworkingsockets
 	PRIVATE
 	$<$<CONFIG:>:EMU_RELEASE_BUILD>
-  $<$<CONFIG:Release>:EMU_RELEASE_BUILD>
+	$<$<CONFIG:Release>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:RelWithDebInfo>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:MinSizeRel>:EMU_RELEASE_BUILD>
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:EMU_EXPERIMENTAL_BUILD>
 )
 
-# Setup install rules for the target
-if(WIN32)
-  install(TARGETS
-    ${LIB_STEAMNETWORKINGSOCKETS}
-    RUNTIME DESTINATION ./
-  )
-else()
-	install(TARGETS
-    ${LIB_STEAMNETWORKINGSOCKETS}
-    LIBRARY DESTINATION ./
-  )
-endif()
-
-if(NOT WIN32)
-  message(STATUS "Target library 'steamnetworkingsockets' is only supported for windows at this time... Disabling Build ALL inclusion for this target")
-	set_target_properties(${LIB_STEAMNETWORKINGSOCKETS} PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
-endif()
+set_target_properties(steamnetworkingsockets PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
 
 ###########################################################################
 # Setup for the lobby_connect(64).exe / lobby_connect
 ###########################################################################
 
 # Setup the target
-add_executable(${BIN_LOBBY_CONNECT}
+add_executable(lobby_connect
 	lobby_connect.cpp
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:${DETOURS_SRC_SHARED}>
 	${DLL_SRC_SHARED}
@@ -244,39 +364,42 @@ add_executable(${BIN_LOBBY_CONNECT}
 	${PROTO_HDRS}
 )
 
-target_include_directories(${BIN_LOBBY_CONNECT}
+target_include_directories(lobby_connect
 	PRIVATE
-	${PROTOBUF_INCLUDE_DIRS}
 	${CMAKE_CURRENT_BINARY_DIR}
 )
 
 # Link the required libraries
-target_link_libraries(${BIN_LOBBY_CONNECT}
+target_link_libraries(lobby_connect
 	PRIVATE
-	protobuf::libprotobuf
+	Threads::Threads
+	protobuf::libprotobuf-lite
+	#nlohmann_json::nlohmann_json doesn't work
+	nlohmann-fifo-map::nlohmann-fifo-map
+	
+	$<$<BOOL:${WIN32}>:comdlg32>
+	$<$<BOOL:${WIN32}>:advapi32>
+	$<$<BOOL:${WIN32}>:shell32>
+	$<$<BOOL:${WIN32}>:user32>
 	$<$<BOOL:${WIN32}>:ws2_32>
 	$<$<BOOL:${WIN32}>:iphlpapi>
-	$<$<BOOL:${WIN32}>:comdlg32>
-  ${CMAKE_DL_LIBS}
+	
+	# For library UNIX loading
+	$<$<NOT:$<BOOL:${WIN32}>>:dl>
+	
 	-debug:none
 )
 
 # Add target compile definitions
-target_compile_definitions(${BIN_LOBBY_CONNECT}
+target_compile_definitions(lobby_connect
 	PRIVATE
 	NO_DISK_WRITES
 	LOBBY_CONNECT
 	$<$<CONFIG:>:EMU_RELEASE_BUILD>
-  $<$<CONFIG:Release>:EMU_RELEASE_BUILD>
+	$<$<CONFIG:Release>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:RelWithDebInfo>:EMU_RELEASE_BUILD>
 	$<$<CONFIG:MinSizeRel>:EMU_RELEASE_BUILD>
 	$<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:EMU_EXPERIMENTAL_BUILD>
-)
-
-# Setup install rules for the target
-install(TARGETS
-  ${BIN_LOBBY_CONNECT}
-  RUNTIME DESTINATION lobby_connect/
 )
 
 ###########################################################################
@@ -284,36 +407,58 @@ install(TARGETS
 ###########################################################################
 
 # Setup the target
-add_executable(${BIN_GENERATE_INTERFACES_FILE}
+add_executable(
+	generate_interfaces
 	generate_interfaces_file.cpp
 )
 
 # Link the required libraries
-target_link_libraries(${BIN_GENERATE_INTERFACES_FILE}
+target_link_libraries(
+	generate_interfaces
 	PRIVATE
 	-debug:none
 )
 
-# Setup install rules for the target
+
+###########################################################################
+# Installation setup
+###########################################################################
+
+if(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+	set(OUT_DIR debug/${OUT_DIR})
+else()
+	set(OUT_DIR release/${OUT_DIR})
+endif()
+
+set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR})
+
+# emulators
+install(
+	TARGETS ${LIB_STEAM_API} ${LIB_STEAMCLIENT}
+	RUNTIME DESTINATION ${OUT_DIR}
+	LIBRARY DESTINATION ${OUT_DIR}
+)
+
+# generate_interfaces
 install(TARGETS
-  ${BIN_GENERATE_INTERFACES_FILE}
-  RUNTIME DESTINATION tools/
+	generate_interfaces
+	RUNTIME DESTINATION ${OUT_DIR}/tools/generate_interfaces
 )
-
-###########################################################################
-# Installation setup for non target files and directories
-###########################################################################
-
-install(FILES 
-  Readme_lobby_connect.txt
-  DESTINATION lobby_connect/
-)
-
 install(FILES 
   scripts/find_interfaces.sh
   scripts/find_interfaces.ps1
   Readme_generate_interfaces.txt
-  DESTINATION tools/
+  DESTINATION ${OUT_DIR}/tools/generate_interfaces
+)
+
+# lobby_connect
+install(TARGETS
+	lobby_connect
+	RUNTIME DESTINATION ${OUT_DIR}/tools/lobby_connect
+)
+install(FILES 
+  Readme_lobby_connect.txt
+  DESTINATION ${OUT_DIR}/tools/lobby_connect
 )
 
 install(FILES 
@@ -322,10 +467,10 @@ install(FILES
   files_example/steam_interfaces.EXAMPLE.txt
   $<$<BOOL:${EMU_EXPERIMENTAL_BUILD}>:${PROJECT_SOURCE_DIR}/Readme_experimental.txt>
   $<$<CONFIG:Debug>:${PROJECT_SOURCE_DIR}/Readme_debug.txt>
-  DESTINATION ./
+  DESTINATION ${OUT_DIR}
 )
 
 install(DIRECTORY 
   files_example/steam_settings.EXAMPLE
-  DESTINATION ./
+  DESTINATION ${OUT_DIR}
 )
