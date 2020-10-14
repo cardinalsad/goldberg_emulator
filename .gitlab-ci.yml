@@ -195,6 +195,7 @@ build:macosx:
     - cmake --install "${OUT}"
     - mkdir release/macosx
     - x86_64-apple-${OSXCROSS_TARGET}-lipo -create release/macosx*/steamclient.dylib -output release/macosx/steamclient.dylib
+    - x86_64-apple-${OSXCROSS_TARGET}-lipo -create release/macosx*/libsteam_api.dylib -output release/macosx/libsteam_api.dylib
 
   artifacts:
     paths:
