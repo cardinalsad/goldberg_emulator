@@ -265,10 +265,6 @@ target_compile_definitions(${LIB_STEAM_API}
 # Setup for the steamclient(64).dll / libsteamclient.so?
 ########################################################
 
-if(UNIX)
-  SET_TARGET_PROPERTIES(${LIB_STEAMCLIENT} PROPERTIES PREFIX "")
-endif()
-
 # Setup the target
 add_library(${LIB_STEAMCLIENT}
 	SHARED
@@ -278,6 +274,10 @@ add_library(${LIB_STEAMCLIENT}
 	${PROTO_SRCS}
 	${PROTO_HDRS}
 )
+
+if(UNIX)
+  SET_TARGET_PROPERTIES(${LIB_STEAMCLIENT} PROPERTIES PREFIX "")
+endif()
 
 # Include the required directories
 target_include_directories(
