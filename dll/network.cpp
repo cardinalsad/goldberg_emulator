@@ -16,6 +16,7 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "network.h"
+#include "dll.h"
 
 #define MAX_BROADCASTS 16
 static int number_broadcasts = -1;
@@ -218,25 +219,26 @@ static int set_socket_nonblocking(sock_t sock)
 
 static void kill_socket(sock_t sock)
 {
-#if defined(STEAM_WIN32)
-    closesocket(sock);
-#else
-    close(sock);
-#endif
+    if (is_socket_valid(sock))
+    {
+    #if defined(STEAM_WIN32)
+        closesocket(sock);
+    #else
+        close(sock);
+    #endif
+    }
 }
 
 static void kill_tcp_socket(struct TCP_Socket &socket)
 {
-    if (is_socket_valid(socket.sock)) {
-        kill_socket(socket.sock);
-    }
-
+    kill_socket(socket.sock);
     socket = TCP_Socket();
 }
 
 static bool initialed;
 static void run_at_startup()
 {
+    static bool initialed = false;
     if (initialed) {
         return;
     }
@@ -891,6 +893,22 @@ void Networking::Run()
     char data[2048];
     int len;
 
+    if (query_alive && is_socket_valid(query_socket)) {
+        PRINT_DEBUG("RECV QUERY\n");
+        Steam_Client* client = get_steam_client();
+        sockaddr_in addr;
+        addr.sin_family = AF_INET;
+
+        while ((len = receive_packet(query_socket, &ip_port, data, sizeof(data))) >= 0) {
+            client->steam_gameserver->HandleIncomingPacket(data, len, htonl(ip_port.ip), htons(ip_port.port));
+            len = client->steam_gameserver->GetNextOutgoingPacket(data, sizeof(data), &ip_port.ip, &ip_port.port);
+
+            addr.sin_addr.s_addr = htonl(ip_port.ip);
+            addr.sin_port        = htons(ip_port.port);
+            sendto(query_socket, data, len, 0, (sockaddr*)&addr, sizeof(addr));
+        }
+    }
+
     PRINT_DEBUG("RECV UDP\n");
     while((len = receive_packet(udp_socket, &ip_port, data, sizeof(data))) >= 0) {
         PRINT_DEBUG("recv %i %hhu.%hhu.%hhu.%hhu:%hu\n", len, ((unsigned char *)&ip_port.ip)[0], ((unsigned char *)&ip_port.ip)[1], ((unsigned char *)&ip_port.ip)[2], ((unsigned char *)&ip_port.ip)[3], htons(ip_port.port));
@@ -1251,4 +1269,76 @@ void Networking::shutDown()
 bool Networking::isAlive()
 {
     return alive;
+}
+
+
+void Networking::startQuery(IP_PORT ip_port)
+{
+    if (ip_port.port <= 1024)
+        return;
+
+    if (!query_alive)
+    {
+        if (ip_port.port == MASTERSERVERUPDATERPORT_USEGAMESOCKETSHARE)
+        {
+            PRINT_DEBUG("Source Query in Shared Mode\n");
+            return;
+        }
+
+        int retry = 0;
+        constexpr auto max_retry = 10;
+        
+        while (retry++ < max_retry)
+        {
+            query_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (is_socket_valid(query_socket))
+                break;
+            if (retry > max_retry)
+            {
+                reset_last_error();
+                return;
+            }
+        }
+        retry = 0;
+
+        sockaddr_in addr;
+        addr.sin_addr.s_addr = htonl(ip_port.ip);
+        addr.sin_port        = htons(ip_port.port);
+        addr.sin_family      = AF_INET;
+
+        while (retry++ < max_retry)
+        {
+            int res = bind(query_socket, (sockaddr*)&addr, sizeof(sockaddr_in));
+            if (res == 0)
+            {
+                set_socket_nonblocking(query_socket);
+                break;
+            }
+
+            if (retry >= max_retry)
+            {
+                kill_socket(query_socket);
+                query_socket = -1;
+                reset_last_error();
+                return;
+            }
+        }
+
+        char str_ip[16];
+        inet_ntop(AF_INET, &(addr.sin_addr), str_ip, 16);
+
+        PRINT_DEBUG("Started query server on %s:%d\n", str_ip, htons(addr.sin_port));
+    }
+    query_alive = true;
+}
+
+void Networking::shutDownQuery()
+{
+    query_alive = false;
+    kill_socket(query_socket);
+}
+
+bool Networking::isQueryAlive()
+{
+    return query_alive;
 }
