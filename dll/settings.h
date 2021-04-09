@@ -145,9 +145,6 @@ public:
     //networking
     bool disable_networking = false;
 
-    //gameserver source query
-    bool disable_source_query = false;
-
     //overlay
     bool disable_overlay = false;
 };

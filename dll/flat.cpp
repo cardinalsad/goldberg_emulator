@@ -5843,9 +5843,15 @@ STEAMAPI_API SteamAPICall_t SteamAPI_ISteamGameServer_GetServerReputation( IStea
     return self->GetServerReputation();
 }
 
-STEAMAPI_API SteamIPAddress_t SteamAPI_ISteamGameServer_GetPublicIP( ISteamGameServer* self )
-{   
-    return  self->GetPublicIP();    
+STEAMAPI_API void *SteamAPI_ISteamGameServer_GetPublicIP( intptr_t instancePtr, void *instancePtr_possible )
+{
+    //abuse call convention rules to get this working.
+    if (steamclient_has_ipv6_functions()) {
+        get_steam_client()->steam_gameserver->GetPublicIP_fix((SteamIPAddress_t *)instancePtr);
+        return (void *)instancePtr;
+    } else {
+        return (void *)((ISteamGameServer012 *)instancePtr)->GetPublicIP_old();
+    }
 }
 
 STEAMAPI_API bool SteamAPI_ISteamGameServer_HandleIncomingPacket( ISteamGameServer* self, const void * pData, int cbData, uint32 srcIP, uint16 srcPort )

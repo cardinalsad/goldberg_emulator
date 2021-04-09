@@ -189,8 +189,6 @@ public:
 	// behind NAT and you want to advertise its IP in a lobby for other clients to directly
 	// connect to
 	virtual uint32 GetPublicIP_old() = 0;
-	
-	virtual SteamIPAddress_t GetPublicIP() = 0;
 
 // These are in GameSocketShare mode, where instead of ISteamGameServer creating its own
 // socket to talk to the master server on, it lets the game use its socket to forward messages

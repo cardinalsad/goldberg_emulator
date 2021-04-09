@@ -1011,7 +1011,7 @@ STEAMAPI_API EUserHasLicenseForAppResult SteamAPI_ISteamGameServer_UserHasLicens
 STEAMAPI_API bool SteamAPI_ISteamGameServer_RequestUserGroupStatus( ISteamGameServer* self, uint64_steamid steamIDUser, uint64_steamid steamIDGroup );
 STEAMAPI_API void SteamAPI_ISteamGameServer_GetGameplayStats( ISteamGameServer* self );
 STEAMAPI_API SteamAPICall_t SteamAPI_ISteamGameServer_GetServerReputation( ISteamGameServer* self );
-STEAMAPI_API SteamIPAddress_t SteamAPI_ISteamGameServer_GetPublicIP( ISteamGameServer* self );
+//STEAMAPI_API SteamIPAddress_t SteamAPI_ISteamGameServer_GetPublicIP( ISteamGameServer* self );
 STEAMAPI_API bool SteamAPI_ISteamGameServer_HandleIncomingPacket( ISteamGameServer* self, const void * pData, int cbData, uint32 srcIP, uint16 srcPort );
 STEAMAPI_API int SteamAPI_ISteamGameServer_GetNextOutgoingPacket( ISteamGameServer* self, void * pOut, int cbMaxOut, uint32 * pNetAdr, uint16 * pPort );
 STEAMAPI_API void SteamAPI_ISteamGameServer_EnableHeartbeats( ISteamGameServer* self, bool bActive );
