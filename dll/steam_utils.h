@@ -15,6 +15,9 @@
    License along with the Goldberg Emulator; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef __INCLUDED_STEAM_UTILS__
+#define __INCLUDED_STEAM_UTILS__
+
 #include "base.h"
 #include "local_storage.h"
 #include "../overlay_experimental/steam_overlay.h"
@@ -406,3 +409,5 @@ ESteamIPv6ConnectivityState GetIPv6ConnectivityState( ESteamIPv6ConnectivityProt
 }
 
 };
+
+#endif
