@@ -16,6 +16,7 @@
    <http://www.gnu.org/licenses/>.  */
 
 #include "steam_gameserver.h"
+#include "source_query.h"
 
 #define SEND_SERVER_RATE 5.0
 
@@ -31,6 +32,11 @@ Steam_GameServer::Steam_GameServer(class Settings *settings, class Networking *n
 Steam_GameServer::~Steam_GameServer()
 {
     delete ticket_manager;
+}
+
+std::vector<std::pair<CSteamID, Gameserver_Player_Info_t>>* Steam_GameServer::get_players()
+{
+    return &players;
 }
 
 //
@@ -53,7 +59,11 @@ bool Steam_GameServer::InitGameServer( uint32 unIP, uint16 usGamePort, uint16 us
     server_data.set_ip(unIP);
     server_data.set_port(usGamePort);
     server_data.set_query_port(usQueryPort);
-    server_data.set_offline(false);
+    server_data.set_offline(false);    
+
+    if (!settings->disable_source_query)
+        network->startQuery({ unIP, usQueryPort });
+
     if (!settings->get_local_game_id().AppID()) settings->set_game_id(CGameID(nGameAppId));
     //TODO: flags should be k_unServerFlag
     flags = unFlags;
@@ -71,7 +81,7 @@ void Steam_GameServer::SetProduct( const char *pszProduct )
 {
     PRINT_DEBUG("SetProduct\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    server_data.set_product(pszProduct);
+    server_data.set_product(pszProduct);// Set product to game name if this is empty
 }
 
 
@@ -344,7 +354,22 @@ bool Steam_GameServer::SendUserConnectAndAuthenticate( uint32 unIPClient, const 
     PRINT_DEBUG("SendUserConnectAndAuthenticate %u %u\n", unIPClient, cubAuthBlobSize);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
-    return ticket_manager->SendUserConnectAndAuthenticate(unIPClient, pvAuthBlob, cubAuthBlobSize, pSteamIDUser);
+    bool res = ticket_manager->SendUserConnectAndAuthenticate(unIPClient, pvAuthBlob, cubAuthBlobSize, pSteamIDUser);
+
+    if (res)
+    {
+        std::pair<CSteamID, Gameserver_Player_Info_t> infos;
+        if( pSteamIDUser != nullptr)
+            infos.first = *pSteamIDUser;
+
+        infos.second.join_time = std::chrono::steady_clock::now();
+        infos.second.score = 0;
+        infos.second.name = "Player";
+
+        players.emplace_back(std::move(infos));
+    }
+
+    return res;
 }
 
 
@@ -357,7 +382,16 @@ CSteamID Steam_GameServer::CreateUnauthenticatedUserConnection()
     PRINT_DEBUG("CreateUnauthenticatedUserConnection\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
-    return ticket_manager->fakeUser();
+    CSteamID bot_id = ticket_manager->fakeUser();
+    std::pair<CSteamID, Gameserver_Player_Info_t> infos;
+    infos.first = bot_id;
+    infos.second.join_time = std::chrono::steady_clock::now();
+    infos.second.score = 0;
+    infos.second.name = "Bot";
+
+    players.emplace_back(std::move(infos));
+
+    return bot_id;
 }
 
 
@@ -368,6 +402,16 @@ void Steam_GameServer::SendUserDisconnect( CSteamID steamIDUser )
 {
     PRINT_DEBUG("SendUserDisconnect\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+
+    auto player_it = std::find_if(players.begin(), players.end(), [&steamIDUser](std::pair<CSteamID, Gameserver_Player_Info_t>& player)
+    {
+        return player.first == steamIDUser;
+    });
+
+    if (player_it != players.end())
+    {
+        players.erase(player_it);
+    }
 
     ticket_manager->endAuth(steamIDUser);
 }
@@ -381,7 +425,21 @@ void Steam_GameServer::SendUserDisconnect( CSteamID steamIDUser )
 bool Steam_GameServer::BUpdateUserData( CSteamID steamIDUser, const char *pchPlayerName, uint32 uScore )
 {
     PRINT_DEBUG("BUpdateUserData\n");
-    return true;
+
+    auto player_it = std::find_if(players.begin(), players.end(), [&steamIDUser](std::pair<CSteamID, Gameserver_Player_Info_t>& player)
+    {
+        return player.first == steamIDUser;
+    });
+
+    if (player_it != players.end())
+    {
+        if( pchPlayerName != nullptr)
+            player_it->second.name = pchPlayerName;
+
+        player_it->second.score = uScore;
+        return true;
+    }
+    return false;
 }
 
 // You shouldn't need to call this as it is called internally by SteamGameServer_Init() and can only be called once.
@@ -584,6 +642,18 @@ bool Steam_GameServer::HandleIncomingPacket( const void *pData, int cbData, uint
 {
     PRINT_DEBUG("HandleIncomingPacket %i %X %i\n", cbData, srcIP, srcPort);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    if (settings->disable_source_query) return true;
+
+    Gameserver_Outgoing_Packet packet;
+    packet.data = std::move(Source_Query::handle_source_query(pData, cbData, server_data));
+    if (packet.data.empty())
+        return false;
+
+
+    packet.ip = srcIP;
+    packet.port = srcPort;
+
+    outgoing_packets.emplace_back(std::move(packet));
     return true;
 }
 
@@ -596,6 +666,7 @@ int Steam_GameServer::GetNextOutgoingPacket( void *pOut, int cbMaxOut, uint32 *p
 {
     PRINT_DEBUG("GetNextOutgoingPacket\n");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    if (settings->disable_source_query) return 0;
     if (outgoing_packets.size() == 0) return 0;
 
     if (outgoing_packets.back().data.size() < cbMaxOut) cbMaxOut = outgoing_packets.back().data.size();
@@ -696,6 +767,10 @@ void Steam_GameServer::RunCallbacks()
             msg.set_allocated_gameserver(new Gameserver(server_data));
             msg.mutable_gameserver()->set_offline(true);
             network->sendToAllIndividuals(&msg, true);
+                        // Shutdown Source Query
+            network->shutDownQuery();
+            // And empty the queue if needed
+            outgoing_packets.clear();
         }
     }
 }
