@@ -40,7 +40,7 @@ static:linux:deps:
 
 static:windows:deps:
   stage: dependencies
-  image: nemirtingas/windowscross_vcpkg:msvc2019
+  image: nemirtingas/windowscross_vcpkg:msvc2019_win10.0.18362.0
   #when: manual
 
   script:
@@ -139,7 +139,7 @@ build:linux:
 
 build:windows:
   stage: build
-  image: nemirtingas/windowscross_vcpkg:msvc2019
+  image: nemirtingas/windowscross_vcpkg:msvc2019_win10.0.18362.0
   dependencies:
     - static:windows:deps
   needs:
