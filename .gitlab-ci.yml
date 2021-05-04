@@ -181,6 +181,7 @@ build:macosx:
 protobuf_static_steamos:
   stage: dependencies
   image: tianon/steamos
+  when: manual
 
   script:
       # don't rebuild every time
@@ -235,6 +236,7 @@ build_windows:
   image: fedora:29
   needs:
     - protobuf_static_steamos
+  when: manual
 
   script:
       - dnf -y install wine wget p7zip sed dos2unix
