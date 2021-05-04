@@ -11,22 +11,13 @@ static:linux:deps:
 
   script:
     - apt update && apt -y install libgl1-mesa-dev libgl1-mesa-dev:i386
+    - dependencies=("glew" "protobuf[zlib]" "curl[core,openssl]" "nlohmann-json" "nlohmann-fifo-map" "stb")
     - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
     - VCPKG_PATH=$(pwd)/vcpkg
     - TRIPLET=x86-linux-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,openssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - TRIPLET=x64-linux-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,openssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - exit 0
 
   cache:
@@ -44,24 +35,15 @@ static:windows:deps:
   #when: manual
 
   script:
-    - VCPKG_PATH=$(pwd)/vcpkg
+    - dependencies=("glew" "protobuf[zlib]" "curl[core,winssl]" "nlohmann-json" "nlohmann-fifo-map" "stb")
     - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
     - TRIPLET=x64-linux
     - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf:${TRIPLET} || exit 1
     - TRIPLET=x86-windows-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,winssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - TRIPLET=x64-windows-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,winssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install glew:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - exit 0
 
   cache:
@@ -79,22 +61,15 @@ static:macosx:deps:
   #when: manual
 
   script:
-    - VCPKG_PATH=$(pwd)/vcpkg
+    - dependencies=("protobuf[zlib]" "curl[core,openssl]" "nlohmann-json" "nlohmann-fifo-map" "stb")
     - cp -f vcpkg_triplets/*.cmake /vcpkg/triplets/
+    - VCPKG_PATH=$(pwd)/vcpkg
     - TRIPLET=x64-linux
     - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf:${TRIPLET} || exit 1
     - TRIPLET=x86-macosx-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,openssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - TRIPLET=x64-macosx-goldberg
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install protobuf[zlib]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install curl[core,openssl]:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install stb:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-json:${TRIPLET} || exit 1
-    - vcpkg "--x-install-root=${VCPKG_PATH}" install nlohmann-fifo-map:${TRIPLET} || exit 1
+    - vcpkg "--x-install-root=${VCPKG_PATH}" install --triplet=${TRIPLET} "${dependencies[@]}" || exit 1
     - exit 0
 
   cache:

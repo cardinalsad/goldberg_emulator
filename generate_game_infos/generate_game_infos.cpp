@@ -8,8 +8,8 @@
 #include <list>
 
 #include <curl/curl.h>
-#include <json/json.hpp>
-#include <json/fifo_map.hpp>
+#include <nlohmann/json.hpp>
+#include <nlohmann/fifo_map.hpp>
 
 class CurlGlobal
 {
@@ -246,7 +246,7 @@ static bool create_directory(std::string const& strPath)
         
     return CreateDirectoryA(strPath.c_str(), NULL);
 }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
