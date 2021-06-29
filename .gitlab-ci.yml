@@ -1,6 +1,7 @@
 stages:
   - dependencies
   - build
+  - sign
   - deploy
   - page_deploy
 
@@ -154,12 +155,45 @@ build_cmake_windows:
       - cmake-builds/
     expire_in: 1 day
 
+sign:
+  stage: sign
+  image: alpine:3.4
+  dependencies:
+    - build_windows
+    - build_steamos
+    
+  script:
+    - apk update && apk add libcurl curl-dev openssl-dev autoconf build-base automake libtool git openssl
+    - git clone https://github.com/dmcgowan/osslsigncode
+    - cd osslsigncode
+    - ./autogen.sh && ./configure && make && make install && make clean || exit 1
+    - cd ..
+    - C="US"
+    - O="Valve"
+    - L="Bellevue"
+    - ST="WA"
+    - SUBJECT="/C=$C/O=$O/L=$L/ST=$ST"
+    - KEY="cert.key"
+    - CERT="cert.pem"
+    - DAYS="365"
+    - ALGO="sha256"
+    - BITS="2048"
+    - PASSW=azerty
+    - openssl req -x509 -"$ALGO" -passin "pass:$PASSW" -passout "pass:$PASSW" -newkey rsa:"$BITS" -subj "$SUBJECT" -keyout "$KEY" -out "$CERT" -days "$DAYS"
+    - osslsigncode sign -certs "$CERT" -h "$ALGO" -key "$KEY" -pass "$PASSW" -in release/steam_api.dll   -out steam_api.dll
+    - osslsigncode sign -certs "$CERT" -h "$ALGO" -key "$KEY" -pass "$PASSW" -in release/steam_api64.dll -out steam_api64.dll
+    - mv steam_api* release/
+
+  artifacts:
+    paths:
+      - linux/
+      - release/
+
 deploy_all:
   stage: deploy
   image: fedora
   dependencies:
-      - build_windows
-      - build_steamos
+    - sign
 
   script:
     - ls -lah
