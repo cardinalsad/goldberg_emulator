@@ -40,6 +40,16 @@
     #define __LINUX__
 #endif
 
+#if defined(__APPLE__)
+    #if defined(__x86_64__)
+        #define __APPLE_64__
+        #define __64BITS__
+    #else
+        #define __APPLE_32__
+        #define __32BITS__
+    #endif
+#endif
+
 #if defined(__WINDOWS__)
     #define STEAM_WIN32
     #ifndef NOMINMAX
@@ -58,8 +68,6 @@
     #include <direct.h>
     #include <iphlpapi.h> // Include winsock2 before this, or winsock2 iphlpapi will be unavailable
     #include <shlobj.h>
-
-    #define MSG_NOSIGNAL 0
 
     #define SystemFunction036 NTAPI SystemFunction036
     #include <ntsecapi.h>
@@ -105,7 +113,15 @@ inline std::wstring utf8_decode(const std::string &str)
     return wstrTo;
 }
 
-#elif defined(__LINUX__)
+#elif defined(__LINUX__) || defined(__APPLE__)
+    #if defined(__LINUX__)
+        // Insert here Linux specific headers
+    #else
+		// Insert here MacOS specific headers
+        #include <sys/sysctl.h>
+        #include <mach-o/dyld_images.h>
+    #endif
+	#include <ifaddrs.h>// getifaddrs
     #include <arpa/inet.h>
 
     #include <sys/types.h>
@@ -118,7 +134,6 @@ inline std::wstring utf8_decode(const std::string &str)
     #include <sys/time.h>
 
     #include <netinet/in.h>
-    #include <linux/netdevice.h>
 
     #include <fcntl.h>
     #include <unistd.h>
@@ -136,6 +151,11 @@ inline std::wstring utf8_decode(const std::string &str)
 
     #define utf8_decode(a) a
 #endif
+
+#ifndef MSG_NOSIGNAL
+	#define MSG_NOSIGNAL 0
+#endif
+
 //#define PRINT_DEBUG(...) fprintf(stdout, __VA_ARGS__)
 #ifdef EMU_RELEASE_BUILD
     #define PRINT_DEBUG(...)
@@ -166,7 +186,8 @@ inline std::wstring utf8_decode(const std::string &str)
 #include <stdio.h>
 
 // Other libs includes
-#include "../json/json.hpp"
+#include <nlohmann/json.hpp>
+#include <nlohmann/fifo_map.hpp>
 #include "../controller/gamepad.h"
 
 // Steamsdk includes

@@ -24,11 +24,11 @@
 #if defined(__WINDOWS__)
 #define STBI_WINDOWS_UTF8
 #endif
-#include "../stb/stb_image.h"
+#include <stb_image.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
-#include "../stb/stb_image_write.h"
+#include <stb_image_write.h>
 
 struct File_Data {
     std::string name;

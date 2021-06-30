@@ -150,44 +150,18 @@ bool check_timedout(std::chrono::high_resolution_clock::time_point old, double t
     return false;
 }
 
-#ifdef __LINUX__
-std::string get_lib_path() {
-  std::string dir = "/proc/self/map_files";
-  DIR *dp;
-  int i = 0;
-  struct dirent *ep;
-  dp = opendir (dir.c_str());
-  uintptr_t p = (uintptr_t)&get_lib_path;
+#if defined(__LINUX__) || defined(__APPLE__)
+std::string get_lib_path()
+{
+    std::string library_path = "./";
 
-  if (dp != NULL)
-  {
-    while ((ep = readdir (dp))) {
-      if (memcmp(ep->d_name, ".", 2) != 0 && memcmp(ep->d_name, "..", 3) != 0) {
-            char *upper = NULL;
-            uintptr_t lower_bound = strtoull(ep->d_name, &upper, 16);
-            if (lower_bound) {
-                ++upper;
-                uintptr_t upper_bound = strtoull(upper, &upper, 16);
-                if (upper_bound && (lower_bound < p && p < upper_bound)) {
-                    std::string path = dir + PATH_SEPARATOR + ep->d_name;
-                    char link[PATH_MAX] = {};
-                    if (readlink(path.c_str(), link, sizeof(link)) > 0) {
-                        std::string lib_path = link;
-                        (void) closedir (dp);
-                        return link;
-                    }
-                }
-            }
+    Dl_info infos;
+    dladdr((void*)&get_lib_path, &infos);
+    library_path = infos.dli_fname;
 
-        i++;
-      }
-    }
-
-    (void) closedir (dp);
-  }
-
-  return ".";
+    return library_path;
 }
+
 #endif
 
 std::string get_full_lib_path()
@@ -222,10 +196,10 @@ std::string get_full_program_path()
 std::string get_current_path()
 {
     std::string path;
-#if defined(STEAM_WIN32)
+#if defined(__WINDOWS__)
     char *buffer = _getcwd( NULL, 0 );
-#else
-    char *buffer = get_current_dir_name();
+#elif defined(__LINUX__) || defined(__APPLE__)
+	char *buffer = getcwd( NULL, 0 );
 #endif
     if (buffer) {
         path = buffer;
@@ -246,7 +220,7 @@ std::string canonical_path(std::string path)
         free(buffer);
     }
 #else
-    char *buffer = canonicalize_file_name(path.c_str());
+    char *buffer = realpath(path.c_str(), NULL);
     if (buffer) {
         output = buffer;
         free(buffer);

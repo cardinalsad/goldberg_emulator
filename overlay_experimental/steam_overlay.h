@@ -182,7 +182,7 @@ public:
     void OpenOverlayInvite(CSteamID lobbyId) {}
     void OpenOverlay(const char* pchDialog) {}
 
-    bool ShowOverlay() const {}
+    bool ShowOverlay() const { return false; }
     void ShowOverlay(bool state) {}
 
     void SetLobbyInvite(Friend friendId, uint64 lobbyId) {}
