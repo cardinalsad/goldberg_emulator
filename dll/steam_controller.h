@@ -317,10 +317,16 @@ int GetConnectedControllers( ControllerHandle_t *handlesOut )
     }
 
     int count = 0;
-    if (GamepadIsConnected(GAMEPAD_0)) {*handlesOut = GAMEPAD_0 + 1; ++handlesOut; ++count;};
-    if (GamepadIsConnected(GAMEPAD_1)) {*handlesOut = GAMEPAD_1 + 1; ++handlesOut; ++count;};
-    if (GamepadIsConnected(GAMEPAD_2)) {*handlesOut = GAMEPAD_2 + 1; ++handlesOut; ++count;};
-    if (GamepadIsConnected(GAMEPAD_3)) {*handlesOut = GAMEPAD_3 + 1; ++handlesOut; ++count;};
+
+    for (int i = GAMEPAD_0; i < GAMEPAD_COUNT; ++i)
+    {
+        if (GamepadIsConnected((GAMEPAD_DEVICE)i))
+        {
+            *handlesOut = i + 1;
+            ++handlesOut;
+            ++count;
+        };
+    }
 
     PRINT_DEBUG("returned %i connected controllers\n", count);
     return count;

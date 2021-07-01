@@ -32,13 +32,25 @@ extern "C" {
 /**
  * Enumeration of the possible devices.
  *
- * Only four devices are supported as this is the limit of Windows.
+ * With open_xinput you can have more than 4 controllers on Windows
  */
 enum GAMEPAD_DEVICE {
-	GAMEPAD_0 = 0,	/**< First gamepad */
-	GAMEPAD_1 = 1,	/**< Second gamepad */
-	GAMEPAD_2 = 2,	/**< Third gamepad */
-	GAMEPAD_3 = 3,	/**< Fourth gamepad */
+	GAMEPAD_0  = 0,  /**< First gamepad */
+	GAMEPAD_1  = 1,  /**< Second gamepad */
+	GAMEPAD_2  = 2,  /**< Third gamepad */
+	GAMEPAD_3  = 3,  /**< Fourth gamepad */
+	GAMEPAD_4  = 4,  
+	GAMEPAD_5  = 5,  
+	GAMEPAD_6  = 6,  
+	GAMEPAD_7  = 7,  
+	GAMEPAD_8  = 8,  
+	GAMEPAD_9  = 9,  
+	GAMEPAD_10 = 10, 
+	GAMEPAD_11 = 11, 
+	GAMEPAD_12 = 12, 
+	GAMEPAD_13 = 13, 
+	GAMEPAD_14 = 14, 
+	GAMEPAD_15 = 15, 
 
 	GAMEPAD_COUNT	/**< Maximum number of supported gamepads */
 };
