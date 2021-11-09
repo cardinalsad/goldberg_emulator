@@ -78,6 +78,40 @@ nlohmann::detail::iter_impl<nlohmann::json> defined_achievements_find(std::strin
         });
 }
 
+nlohmann::json defined_achievements_find_all(std::string key)
+{
+    nlohmann::json list;
+    std::copy_if(defined_achievements.begin(), defined_achievements.end(), std::back_inserter(list), [key, this](nlohmann::json& item) {
+            std::string name = static_cast<std::string const&>(item["name"]);
+            bool exactFind = key.size() == name.size() && std::equal(name.begin(), name.end(), key.begin(),
+                                                            [](char a, char b) {
+                                                                return tolower(a) == tolower(b);
+                                                            });
+            if (exactFind) return true;
+            if (key.size() < name.size() && std::equal(key.begin(), key.end(), name.begin(),
+                                                    [](char a, char b) {
+                                                        return tolower(a) == tolower(b);
+                                                    })
+            ) {
+                // ex: stat stored as "total_gil", achievements named "total_gil_100", "total_gil_1000". Compares stat value to achievement's last part of name
+                int32 *data = (int32*)malloc(sizeof(int32));
+                if (GetStat(key.c_str(), data)) {
+                    std::string strValue = name.substr(name.find_last_of('_') + 1);
+                    int32 value = 0;
+                    try {
+                        value = std::stoi(strValue, nullptr, 10);
+                        return *data >= value;
+                    }
+                    catch (...) {}
+                }
+                free(data);
+            }
+            
+            return false;
+        });
+    return list;
+}
+
 void load_achievements_db()
 {
     std::string file_path = Local_Storage::get_game_settings_path() + achievements_user_file;
@@ -270,22 +304,23 @@ bool SetAchievement( const char *pchName )
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
     try {
-        auto it = defined_achievements_find(pchName);
-        if (it == defined_achievements.end()) return false;
-        std::string pch_name = it->value("name", std::string());
+        auto achievements = defined_achievements_find_all(pchName);
+        for (auto it = achievements.begin(); it != achievements.end(); ++it) {
+            std::string pch_name = it->value("name", std::string());
 
-        if (it != defined_achievements.end()) {
             if (user_achievements.find(pch_name) == user_achievements.end() || user_achievements[pch_name].value("earned", false) == false) {
                 user_achievements[pch_name]["earned"] = true;
                 user_achievements[pch_name]["earned_time"] = std::chrono::duration_cast<std::chrono::duration<uint32>>(std::chrono::system_clock::now().time_since_epoch()).count();
 #ifdef EMU_OVERLAY
                 overlay->AddAchievementNotification(it.value());
 #endif
-                save_achievements();
             }
-
-            return true;
         }
+
+        save_achievements();
+
+        return true;
+
     } catch (...) {}
 
     return false;
